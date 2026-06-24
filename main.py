@@ -1,12 +1,16 @@
+
+```python
 import os
 import feedparser
 import requests
 from google import genai
 
+# 1. Проверяем переменные окружения
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
+# 2. Инициализируем клиент Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 feeds = [
@@ -20,17 +24,28 @@ feeds = [
 
 news = []
 
+# Юзер-агент, чтобы сайты не блокировали скрипт как робота
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
 for feed_url in feeds:
     try:
-        feed = feedparser.parse(feed_url)
+        # Скачиваем фид с заголовками, чтобы избежать блокировок
+        resp = requests.get(feed_url, headers=headers, timeout=10)
+        feed = feedparser.parse(resp.content)
 
-        for entry in feed.entries[:10]:
-            news.append(entry.title)
+        if feed.entries:
+            for entry in feed.entries[:10]:
+                news.append(entry.title)
+        else:
+            print(f"Предупреждение: Лента {feed_url} пуста или не распарсилась.")
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Ошибка при чтении ленты {feed_url}: {e}")
 
 raw_news = "\n".join(news)
+
+if not raw_news:
+    raw_news = "Нет свежих новостей от источников за текущий период."
 
 portfolio = """
 SPY 6.87%
@@ -52,15 +67,12 @@ prompt = f"""
 Ты главный инвестиционный аналитик.
 
 Мой портфель:
-
 {portfolio}
 
 Новости:
-
 {raw_news}
 
 Правила:
-
 1. Пиши только на русском языке.
 2. Игнорируй незначимые новости.
 3. Не повторяй одну мысль разными словами.
@@ -69,7 +81,6 @@ prompt = f"""
 6. Не выдумывай факты и инвестиционные идеи.
 
 Формат ответа:
-
 📌 Главное за сутки
 (максимум 5 пунктов)
 
@@ -88,3 +99,35 @@ prompt = f"""
 
 Максимум 1200 символов.
 """
+
+# 3. Генерируем анализ через Gemini (Исправленный синтаксис)
+try:
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+    analysis_result = response.text
+except Exception as e:
+    print(f"Ошибка при запросе к Gemini API: {e}")
+    raise e
+
+# 4. Блок отправки сформированного ответа в Telegram
+def send_to_telegram(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        res.raise_for_status()
+        print("Анализ успешно отправлен в Telegram!")
+    except Exception as e:
+        print(f"Ошибка отправки в Telegram: {e}")
+        if 'res' in locals():
+            print(f"Ответ API Telegram: {res.text}")
+        raise e
+
+# Запуск отправки
+send_to_telegram(analysis_result)
