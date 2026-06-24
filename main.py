@@ -1,5 +1,3 @@
-
-```python
 import os
 import feedparser
 import requests
@@ -100,7 +98,7 @@ prompt = f"""
 Максимум 1200 символов.
 """
 
-# 3. Генерируем анализ через Gemini (Исправленный синтаксис)
+# 3. Генерируем анализ через Gemini
 try:
     response = client.models.generate_content(
         model="gemini-2.5-flash",
