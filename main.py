@@ -10,8 +10,12 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 feeds = [
-    "https://www.reutersagency.com/feed/?best-topics=business-finance",
-    "https://world-nuclear-news.org/rss",
+    "https://ir.thomsonreuters.com/rss/financial-news.xml",
+    "https://feeds.bloomberg.com/wealth/news.rss",
+    "https://www.nasdaqtrader.com/rss.aspx?feed=openmarketalerts",
+    "http://feeds.marketwatch.com/marketwatch/topstories/",
+    "https://search.cnbc.com/rs/search/combined/search.rss?partnerId=240&keywords=finance",
+    "https://www.centralbanking.com/rss",
 ]
 
 news = []
@@ -45,43 +49,42 @@ PSLV 10.71%
 """
 
 prompt = f"""
-Ты инвестиционный аналитик.
+Ты главный инвестиционный аналитик.
 
-Вот мой портфель:
+Мой портфель:
 
 {portfolio}
 
-Вот новости за последние сутки:
+Новости:
 
 {raw_news}
 
-Сделай ответ на русском языке.
+Правила:
 
-Формат:
+1. Пиши только на русском языке.
+2. Игнорируй незначимые новости.
+3. Не повторяй одну мысль разными словами.
+4. Не пиши общие рассуждения.
+5. Если новостей по категории нет — так и напиши.
+6. Не выдумывай факты и инвестиционные идеи.
 
-1. Самые важные новости (не более 7 пунктов).
-2. Влияние на мой портфель.
-3. Что важно для урана.
-4. Что важно для серебра.
-5. Что важно для энергетики.
-6. Есть ли новые инвестиционные идеи вне портфеля.
-7. Не пиши воду и общие рассуждения.
-8. Максимум 1500 символов.
+Формат ответа:
+
+📌 Главное за сутки
+(максимум 5 пунктов)
+
+📈 Влияние на мой портфель
+- Уран
+- Серебро
+- Энергетика
+- Акции
+- Биткоин
+
+🔎 Новые идеи вне портфеля
+(только если найдены реальные идеи)
+
+⚠️ Риски
+(что может ухудшить ситуацию)
+
+Максимум 1200 символов.
 """
-
-response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=prompt
-)
-
-digest = response.text
-
-requests.post(
-    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-    json={
-        "chat_id": CHAT_ID,
-        "text": digest
-    }
-)
-
-print("Done")
