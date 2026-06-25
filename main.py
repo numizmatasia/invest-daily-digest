@@ -36,7 +36,7 @@ for feed_url in feeds:
         if feed.entries:
             for entry in feed.entries[:5]:
                 summary = getattr(entry, "summary", "")
-news.append(f"Заголовок: {entry.title}\nОписание: {summary}")
+                news.append(f"Заголовок: {entry.title}\nОписание: {summary}")
         else:
             print(f"Предупреждение: Лента {feed_url} пуста или не распарсилась.")
 
