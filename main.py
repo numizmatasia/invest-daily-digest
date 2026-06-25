@@ -12,12 +12,14 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 feeds = [
-    "https://ir.thomsonreuters.com/rss/financial-news.xml",
-    "https://feeds.bloomberg.com/wealth/news.rss",
-    "https://www.nasdaqtrader.com/rss.aspx?feed=openmarketalerts",
-    "http://feeds.marketwatch.com/marketwatch/topstories/",
-    "https://search.cnbc.com/rs/search/combined/search.rss?partnerId=240&keywords=finance",
-    "https://www.centralbanking.com/rss",
+    "https://world-nuclear-news.org/rss",
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://seekingalpha.com/feed.xml",
+    "https://www.investing.com/rss/news.rss",
+    "https://www.mining.com/feed/",
+    "https://oilprice.com/rss/main",
+    "https://techcrunch.com/feed/",
+    "https://www.marketwatch.com/rss/topstories",
 ]
 
 news = []
