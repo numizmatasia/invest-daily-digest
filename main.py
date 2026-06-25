@@ -32,7 +32,7 @@ for feed_url in feeds:
         feed = feedparser.parse(resp.content)
 
         if feed.entries:
-            for entry in feed.entries[:10]:
+            for entry in feed.entries[:5]:
                 news.append(entry.title)
         else:
             print(f"Предупреждение: Лента {feed_url} пуста или не распарсилась.")
