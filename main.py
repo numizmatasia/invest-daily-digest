@@ -112,16 +112,26 @@ prompt = f"""
 
 # 3. Генерируем анализ через Gemini
 try:
-    response = client.models.generate_content(
+   response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt,
     )
     analysis_result = response.text
 
 except Exception as e:
-    print(f"Ошибка при запросе к Gemini API: {e}")
+    print(f"Ошибка 2.5 Flash: {e}")
 
-    analysis_result = f"""
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        analysis_result = response.text
+
+    except Exception as e2:
+        print(f"Ошибка 2.0 Flash: {e2}")
+
+        analysis_result = f"""
 📈 Инвест дайджест
 
 Gemini временно недоступен.
