@@ -115,7 +115,6 @@ def send_to_telegram(text):
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown"
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
