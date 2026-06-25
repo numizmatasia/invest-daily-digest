@@ -16,7 +16,6 @@ feeds = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://seekingalpha.com/feed.xml",
     "https://www.investing.com/rss/news.rss",
-    "https://www.mining.com/feed/",
     "https://oilprice.com/rss/main",
     "https://techcrunch.com/feed/",
     "https://www.marketwatch.com/rss/topstories",
@@ -34,7 +33,7 @@ for feed_url in feeds:
         feed = feedparser.parse(resp.content)
 
         if feed.entries:
-            for entry in feed.entries[:5]:
+            for entry in feed.entries[:3]:
                 summary = getattr(entry, "summary", "")
                 news.append(f"Заголовок: {entry.title}\nОписание: {summary}")
         else:
