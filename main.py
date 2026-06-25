@@ -110,9 +110,19 @@ try:
         contents=prompt,
     )
     analysis_result = response.text
+
 except Exception as e:
     print(f"Ошибка при запросе к Gemini API: {e}")
-    raise e
+
+    analysis_result = f"""
+📈 Инвест дайджест
+
+Gemini временно недоступен.
+
+Собрано новостей: {len(news)}
+
+Проверьте следующий автоматический запуск.
+"""
 
 # 4. Блок отправки сформированного ответа в Telegram
 def send_to_telegram(text):
