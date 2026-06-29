@@ -1,14 +1,13 @@
 import os
 import feedparser
 import requests
+from datetime import datetime
 from google import genai
 
-# 1. Проверяем переменные окружения
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-# 2. Инициализируем клиент Gemini
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 feeds = [
@@ -19,35 +18,11 @@ feeds = [
     "https://oilprice.com/rss/main",
     "https://techcrunch.com/feed/",
     "https://www.marketwatch.com/rss/topstories",
+    "https://www.prnewswire.com/rss/news-releases-list.rss",
+    "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies",
 ]
 
-news = []
-
-# Юзер-агент, чтобы сайты не блокировали скрипт как робота
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-
-for feed_url in feeds:
-    try:
-        # Скачиваем фид с заголовками, чтобы избежать блокировок
-        resp = requests.get(feed_url, headers=headers, timeout=10)
-        feed = feedparser.parse(resp.content)
-
-        if feed.entries:
-            for entry in feed.entries[:3]:
-                summary = getattr(entry, "summary", "")
-                news.append(f"Заголовок: {entry.title}\nОписание: {summary}")
-        else:
-            print(f"Предупреждение: Лента {feed_url} пуста или не распарсилась.")
-
-    except Exception as e:
-        print(f"Ошибка при чтении ленты {feed_url}: {e}")
-
-raw_news = "\n".join(news)
-
-if not raw_news:
-    raw_news = "Нет свежих новостей от источников за текущий период."
-
-portfolio = """
+FREEDOM_PORTFOLIO = """
 SPY 6.87%
 VT 5.32%
 QQQM 0.92%
@@ -63,106 +38,225 @@ SIVR 16.59%
 PSLV 10.71%
 """
 
+PAIDAX_PORTFOLIO = """
+VT
+AMAT
+VRT
+NVDA
+GLD
+MU
+SPYG
+PL
+"""
+
+WATCH_LIST = """
+AVGO Broadcom
+AMZN Amazon
+GOOGL Alphabet
+SKHY / SK Hynix
+META Meta
+"""
+
+EVENT_KEYWORDS = [
+    "IPO", "initial public offering", "ADR", "Nasdaq listing", "NYSE listing",
+    "direct listing", "secondary offering", "share offering", "stock split",
+    "spin-off", "spinoff", "index inclusion", "S&P 500", "Nasdaq 100",
+    "lock-up", "merger", "acquisition", "listing"
+]
+
+headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+news = []
+
+print(f"Старт скрипта UTC: {datetime.utcnow()}")
+
+for feed_url in feeds:
+    try:
+        resp = requests.get(feed_url, headers=headers, timeout=15)
+        feed = feedparser.parse(resp.content)
+
+        if feed.entries:
+            for entry in feed.entries[:4]:
+                title = getattr(entry, "title", "")
+                summary = getattr(entry, "summary", "")
+                link = getattr(entry, "link", "")
+
+                news.append(
+                    f"Источник: {feed_url}\n"
+                    f"Заголовок: {title}\n"
+                    f"Описание: {summary}\n"
+                    f"Ссылка: {link}"
+                )
+        else:
+            print(f"Предупреждение: лента пуста: {feed_url}")
+
+    except Exception as e:
+        print(f"Ошибка при чтении {feed_url}: {e}")
+
+raw_news = "\n\n".join(news)
+
+if not raw_news:
+    raw_news = "Нет свежих новостей от источников за текущий период."
+
 prompt = f"""
-Ты мой личный инвестиционный помощник.
+Ты мой личный инвестиционный помощник v2.0.
 
-Мой портфель:
+Твоя задача — не пересказывать новости, а помочь принять решение:
+что важно, что влияет на мои деньги, есть ли возможность заработать, и что делать сегодня.
 
-{portfolio}
+Пиши простым русским языком, как для человека без финансового образования.
 
-Новости:
+ВАЖНО:
+- Не выдумывай факты.
+- Не придумывай идеи без новостей или подтверждений.
+- Если сильных идей нет — честно напиши: сегодня ничего делать не нужно.
+- Не используй сложные термины без объяснения.
+- Не давай рекомендацию только по одной слабой новости.
+- Максимум 2500 символов.
+
+Мой портфель Freedom:
+
+{FREEDOM_PORTFOLIO}
+
+Мой портфель Paidax:
+
+{PAIDAX_PORTFOLIO}
+
+Мой Watch List:
+
+{WATCH_LIST}
+
+Новости за сутки:
 
 {raw_news}
 
-Правила:
+ПРОВЕРКА ИДЕЙ:
+Каждую идею оцени по 7 фильтрам:
+1. Что произошло?
+2. Это новая информация или рынок уже знал?
+3. Влияет ли это на прибыль компании?
+4. Цена выглядит разумной или уже перегрета?
+5. Как реагирует рынок?
+6. Есть ли подтверждение из разных источников?
+7. Подходит ли это моим портфелям и риску?
 
-1. Пиши только на русском языке.
-2. Пиши простым языком, как для человека без финансового образования.
-3. Не используй слова:
-   - инвестиционный тезис
-   - волатильность
-   - ликвидность
-   - макроэкономика
-   - нейтральный фон
-4. Не пересказывай новости длинно.
-5. Объясняй только то, что важно для моего портфеля.
-6. Если новость не влияет на мой портфель — пропускай её.
-7. Не выдумывай факты.
-8. Не выдумывай инвестиционные идеи.
-9. Если сегодня ничего важного не произошло — так и напиши.
+СТАТУС ДНЯ:
+Выбери один вариант:
+🟢 Спокойный день
+🟡 День внимания
+🔴 Важный день
+⚠️ Экстренный день
 
-Формат ответа:
+ФОРМАТ ОТВЕТА ДЛЯ TELEGRAM.
+Используй HTML-теги для жирного текста: <b>текст</b>.
 
-📌 Что важно сегодня
+<b>🎯 ГЛАВНОЕ НА СЕГОДНЯ</b>
+<b>Одна короткая строка до 20 слов.</b>
 
-Не более 5 пунктов.
+<b>Статус дня:</b>
+🟢 / 🟡 / 🔴 / ⚠️ + короткая причина.
 
-Для каждого пункта:
-- что произошло
-- почему это хорошо или плохо
+<b>1️⃣ Что произошло?</b>
+Максимум 5 главных событий. Без длинного пересказа.
 
-📊 Мои активы
+<b>2️⃣ Что важно сегодня?</b>
+События, за которыми нужно следить сегодня. Если нет — напиши: важных событий на сегодня не найдено.
 
-🟢 Хорошие новости
-Какие мои активы получили поддержку.
+<b>3️⃣ Что влияет на мои деньги?</b>
 
-🟡 Без изменений
-По каким активам ничего важного не произошло.
+<b>Freedom:</b>
+Только важное для этого портфеля. Если ничего — напиши: существенных изменений нет.
 
-🔴 Плохие новости
-Какие мои активы получили негативный сигнал.
+<b>Paidax:</b>
+Только важное для этого портфеля. Если ничего — напиши: существенных изменений нет.
 
-📋 Что делать сегодня
+<b>4️⃣ Watch List</b>
+Пиши только если есть важные изменения по AVGO, AMZN, GOOGL, SK Hynix/SKHY, META.
 
+<b>5️⃣ Возможности заработать</b>
+
+<b>🧭 Скаут рынка:</b>
+Найди до 3 идей в любых отраслях: IPO, ADR, split, spin-off, резкое движение, отчет, важный контракт.
+
+<b>👔 Проверка портфельного управляющего:</b>
+Объясни, подходит ли идея именно мне:
+- долгосрочно
+- только для спекуляции
+- лучше пропустить
+
+Оцени идеи:
+⭐⭐⭐⭐⭐ сильная идея
+⭐⭐⭐⭐ хорошая идея, но с условиями
+⭐⭐⭐ только наблюдать
+⭐⭐ слабая идея
+❌ пропустить
+
+<b>6️⃣ Что сегодня НЕ делать</b>
+1-3 пункта. Например: не усреднять, не покупать на эмоциях, не продавать без причины.
+
+<b>7️⃣ Итог дня</b>
 Выбери только один вариант:
+✅ Купить
+💰 Продать / зафиксировать прибыль
+⏳ Ждать
+❌ Ничего не делать
 
-- Ничего не делать.
-- Следить за ситуацией.
-- Рассмотреть покупку.
-- Рассмотреть продажу.
-
-После выбора объясни причину максимум в 3 предложениях.
-
-Максимум 1000 символов.
+Объясни максимум в 3 предложениях.
 """
 
-# 3. Генерируем анализ через Gemini
 try:
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-    )
-    analysis_result = response.text
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        analysis_result = response.text
+
+    except Exception as e:
+        print(f"Ошибка Gemini 2.5 Flash: {e}")
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        analysis_result = response.text
 
 except Exception as e:
     print(f"Ошибка Gemini: {e}")
 
     analysis_result = f"""
-📈 Инвест дайджест
+<b>📈 Личный инвестиционный помощник</b>
 
 Gemini временно недоступен.
 
 Собрано новостей: {len(news)}
 
-Проверьте следующий автоматический запуск.
+Рекомендация:
+⏳ Ждать. Не принимать решений без анализа.
 """
 
-# 4. Блок отправки сформированного ответа в Telegram
 def send_to_telegram(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    if len(text) > 3900:
+        text = text[:3900] + "\n\n...сообщение сокращено из-за лимита Telegram."
+
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
     }
+
     try:
-        res = requests.post(url, json=payload, timeout=10)
+        res = requests.post(url, json=payload, timeout=15)
         res.raise_for_status()
         print("Анализ успешно отправлен в Telegram!")
     except Exception as e:
         print(f"Ошибка отправки в Telegram: {e}")
-        if 'res' in locals():
-            print(f"Ответ API Telegram: {res.text}")
+        if "res" in locals():
+            print(f"Ответ Telegram: {res.text}")
         raise e
 
-# Запуск отправки
 send_to_telegram(analysis_result)
+
+print(f"Финиш скрипта UTC: {datetime.utcnow()}")
