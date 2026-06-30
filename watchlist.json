@@ -1,0 +1,24 @@
+{
+  "watchlist": [
+    {
+      "ticker": "AVGO",
+      "name": "Broadcom"
+    },
+    {
+      "ticker": "AMZN",
+      "name": "Amazon"
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "Alphabet"
+    },
+    {
+      "ticker": "SKHY",
+      "name": "SK Hynix"
+    },
+    {
+      "ticker": "META",
+      "name": "Meta"
+    }
+  ]
+}
