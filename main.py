@@ -1,4 +1,5 @@
 import os
+import json
 import feedparser
 import requests
 from datetime import datetime
@@ -22,41 +23,6 @@ feeds = [
     "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies",
 ]
 
-FREEDOM_PORTFOLIO = """
-SPY 6.87%
-VT 5.32%
-QQQM 0.92%
-IXUS 8.56%
-SPYM 17.52%
-KZAPD 2.28%
-CCJ 17.40%
-CORE 0.31%
-XLE 6.80%
-UROY 5.13%
-IBIT 1.44%
-SIVR 16.59%
-PSLV 10.71%
-"""
-
-PAIDAX_PORTFOLIO = """
-VT
-AMAT
-VRT
-NVDA
-GLD
-MU
-SPYG
-PL
-"""
-
-WATCH_LIST = """
-AVGO Broadcom
-AMZN Amazon
-GOOGL Alphabet
-SKHY / SK Hynix
-META Meta
-"""
-
 EVENT_KEYWORDS = [
     "IPO", "initial public offering", "ADR", "Nasdaq listing", "NYSE listing",
     "direct listing", "secondary offering", "share offering", "stock split",
@@ -65,6 +31,54 @@ EVENT_KEYWORDS = [
 ]
 
 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+
+def load_json_file(filename):
+    try:
+        with open(filename, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except Exception as e:
+        print(f"Ошибка чтения файла {filename}: {e}")
+        return {}
+
+
+def format_portfolio(portfolio_data):
+    result = []
+
+    for portfolio_name, positions in portfolio_data.items():
+        result.append(f"{portfolio_name}:")
+
+        for ticker, weight in positions.items():
+            if weight is None:
+                result.append(f"{ticker}")
+            else:
+                result.append(f"{ticker} {weight}%")
+
+        result.append("")
+
+    return "\n".join(result)
+
+
+def format_watchlist(watchlist_data):
+    result = []
+
+    for item in watchlist_data.get("watchlist", []):
+        ticker = item.get("ticker", "")
+        name = item.get("name", "")
+
+        if name:
+            result.append(f"{ticker} {name}")
+        else:
+            result.append(ticker)
+
+    return "\n".join(result)
+
+
+portfolio_data = load_json_file("portfolio.json")
+watchlist_data = load_json_file("watchlist.json")
+
+PORTFOLIO_TEXT = format_portfolio(portfolio_data)
+WATCH_LIST = format_watchlist(watchlist_data)
 
 news = []
 
@@ -114,13 +128,9 @@ prompt = f"""
 - Не давай рекомендацию только по одной слабой новости.
 - Максимум 2500 символов.
 
-Мой портфель Freedom:
+Мои портфели:
 
-{FREEDOM_PORTFOLIO}
-
-Мой портфель Paidax:
-
-{PAIDAX_PORTFOLIO}
+{PORTFOLIO_TEXT}
 
 Мой Watch List:
 
@@ -171,7 +181,7 @@ prompt = f"""
 Только важное для этого портфеля. Если ничего — напиши: существенных изменений нет.
 
 <b>4️⃣ Watch List</b>
-Пиши только если есть важные изменения по AVGO, AMZN, GOOGL, SK Hynix/SKHY, META.
+Пиши только если есть важные изменения по Watch List.
 
 <b>5️⃣ Возможности заработать</b>
 
@@ -234,6 +244,7 @@ Gemini временно недоступен.
 ⏳ Ждать. Не принимать решений без анализа.
 """
 
+
 def send_to_telegram(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
@@ -256,6 +267,7 @@ def send_to_telegram(text):
         if "res" in locals():
             print(f"Ответ Telegram: {res.text}")
         raise e
+
 
 send_to_telegram(analysis_result)
 
