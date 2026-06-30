@@ -1,0 +1,27 @@
+{
+  "Freedom": {
+    "SPY": 6.87,
+    "VT": 5.32,
+    "QQQM": 0.92,
+    "IXUS": 8.56,
+    "SPYM": 17.52,
+    "KZAPD": 2.28,
+    "CCJ": 17.40,
+    "CORE": 0.31,
+    "XLE": 6.80,
+    "UROY": 5.13,
+    "IBIT": 1.44,
+    "SIVR": 16.59,
+    "PSLV": 10.71
+  },
+  "Paidax": {
+    "VT": null,
+    "AMAT": null,
+    "VRT": null,
+    "NVDA": null,
+    "GLD": null,
+    "MU": null,
+    "SPYG": null,
+    "PL": null
+  }
+}
