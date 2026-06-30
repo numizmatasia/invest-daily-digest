@@ -5,6 +5,9 @@ import requests
 from datetime import datetime
 from google import genai
 
+from news_processor import process_news, format_news_for_prompt
+from event_engine import detect_events, format_events_for_prompt
+
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
@@ -21,13 +24,6 @@ feeds = [
     "https://www.marketwatch.com/rss/topstories",
     "https://www.prnewswire.com/rss/news-releases-list.rss",
     "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies",
-]
-
-EVENT_KEYWORDS = [
-    "IPO", "initial public offering", "ADR", "Nasdaq listing", "NYSE listing",
-    "direct listing", "secondary offering", "share offering", "stock split",
-    "spin-off", "spinoff", "index inclusion", "S&P 500", "Nasdaq 100",
-    "lock-up", "merger", "acquisition", "listing"
 ]
 
 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -74,43 +70,85 @@ def format_watchlist(watchlist_data):
     return "\n".join(result)
 
 
+def collect_raw_news():
+    raw_items = []
+
+    for feed_url in feeds:
+        try:
+            resp = requests.get(feed_url, headers=headers, timeout=15)
+            feed = feedparser.parse(resp.content)
+
+            if feed.entries:
+                for entry in feed.entries[:4]:
+                    raw_items.append({
+                        "source": feed_url,
+                        "title": getattr(entry, "title", ""),
+                        "summary": getattr(entry, "summary", ""),
+                        "link": getattr(entry, "link", "")
+                    })
+            else:
+                print(f"Предупреждение: лента пуста: {feed_url}")
+
+        except Exception as e:
+            print(f"Ошибка при чтении {feed_url}: {e}")
+
+    return raw_items
+
+
+def make_event_input(news_items):
+    result = []
+
+    for item in news_items:
+        result.append(
+            f"Источник: {item.get('source', '')}\n"
+            f"Заголовок: {item.get('title', '')}\n"
+            f"Описание: {item.get('summary', '')}\n"
+            f"Ссылка: {item.get('link', '')}"
+        )
+
+    return result
+
+
+def send_to_telegram(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    if len(text) > 3900:
+        text = text[:3900] + "\n\n...сообщение сокращено из-за лимита Telegram."
+
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    try:
+        res = requests.post(url, json=payload, timeout=15)
+        res.raise_for_status()
+        print("Анализ успешно отправлен в Telegram!")
+    except Exception as e:
+        print(f"Ошибка отправки в Telegram: {e}")
+        if "res" in locals():
+            print(f"Ответ Telegram: {res.text}")
+        raise e
+
+
+print(f"Старт скрипта UTC: {datetime.utcnow()}")
+
 portfolio_data = load_json_file("portfolio.json")
 watchlist_data = load_json_file("watchlist.json")
 
 PORTFOLIO_TEXT = format_portfolio(portfolio_data)
 WATCH_LIST = format_watchlist(watchlist_data)
 
-news = []
+raw_news_items = collect_raw_news()
+processed_news = process_news(raw_news_items)
 
-print(f"Старт скрипта UTC: {datetime.utcnow()}")
+raw_news = format_news_for_prompt(processed_news)
 
-for feed_url in feeds:
-    try:
-        resp = requests.get(feed_url, headers=headers, timeout=15)
-        feed = feedparser.parse(resp.content)
-
-        if feed.entries:
-            for entry in feed.entries[:4]:
-                title = getattr(entry, "title", "")
-                summary = getattr(entry, "summary", "")
-                link = getattr(entry, "link", "")
-
-                news.append(
-                    f"Источник: {feed_url}\n"
-                    f"Заголовок: {title}\n"
-                    f"Описание: {summary}\n"
-                    f"Ссылка: {link}"
-                )
-        else:
-            print(f"Предупреждение: лента пуста: {feed_url}")
-
-    except Exception as e:
-        print(f"Ошибка при чтении {feed_url}: {e}")
-
-raw_news = "\n\n".join(news)
-
-if not raw_news:
-    raw_news = "Нет свежих новостей от источников за текущий период."
+event_input = make_event_input(processed_news)
+detected_events = detect_events(event_input)
+events_text = format_events_for_prompt(detected_events)
 
 prompt = f"""
 Ты мой личный инвестиционный помощник v2.0.
@@ -127,6 +165,8 @@ prompt = f"""
 - Не используй сложные термины без объяснения.
 - Не давай рекомендацию только по одной слабой новости.
 - Максимум 2500 символов.
+- Главный источник анализа — инвестиционные события, найденные алгоритмом.
+- Полный список новостей используй только для проверки фактов.
 
 Мои портфели:
 
@@ -136,7 +176,11 @@ prompt = f"""
 
 {WATCH_LIST}
 
-Новости за сутки:
+Инвестиционные события, найденные алгоритмом:
+
+{events_text}
+
+Полный список новостей за сутки для проверки:
 
 {raw_news}
 
@@ -167,7 +211,7 @@ prompt = f"""
 🟢 / 🟡 / 🔴 / ⚠️ + короткая причина.
 
 <b>1️⃣ Что произошло?</b>
-Максимум 5 главных событий. Без длинного пересказа.
+Максимум 3 главных события. Не пересказывай все новости подряд.
 
 <b>2️⃣ Что важно сегодня?</b>
 События, за которыми нужно следить сегодня. Если нет — напиши: важных событий на сегодня не найдено.
@@ -186,7 +230,8 @@ prompt = f"""
 <b>5️⃣ Возможности заработать</b>
 
 <b>🧭 Скаут рынка:</b>
-Найди до 3 идей в любых отраслях: IPO, ADR, split, spin-off, резкое движение, отчет, важный контракт.
+Найди до 2 идей в любых отраслях: IPO, ADR, split, spin-off, резкое движение, отчет, важный контракт.
+Если сильных идей нет — прямо напиши: сильных идей для покупки сегодня нет.
 
 <b>👔 Проверка портфельного управляющего:</b>
 Объясни, подходит ли идея именно мне:
@@ -238,36 +283,11 @@ except Exception as e:
 
 Gemini временно недоступен.
 
-Собрано новостей: {len(news)}
+Собрано новостей: {len(processed_news)}
 
 Рекомендация:
 ⏳ Ждать. Не принимать решений без анализа.
 """
-
-
-def send_to_telegram(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-    if len(text) > 3900:
-        text = text[:3900] + "\n\n...сообщение сокращено из-за лимита Telegram."
-
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-
-    try:
-        res = requests.post(url, json=payload, timeout=15)
-        res.raise_for_status()
-        print("Анализ успешно отправлен в Telegram!")
-    except Exception as e:
-        print(f"Ошибка отправки в Telegram: {e}")
-        if "res" in locals():
-            print(f"Ответ Telegram: {res.text}")
-        raise e
-
 
 send_to_telegram(analysis_result)
 
