@@ -41,44 +41,32 @@ def load_json_file(filename):
 
 def format_portfolio(portfolio_data):
     result = []
-
     for portfolio_name, positions in portfolio_data.items():
         result.append(f"{portfolio_name}:")
-
         for ticker, weight in positions.items():
             if weight is None:
                 result.append(f"{ticker}")
             else:
                 result.append(f"{ticker} {weight}%")
-
         result.append("")
-
     return "\n".join(result)
 
 
 def format_watchlist(watchlist_data):
     result = []
-
     for item in watchlist_data.get("watchlist", []):
         ticker = item.get("ticker", "")
         name = item.get("name", "")
-
-        if name:
-            result.append(f"{ticker} {name}")
-        else:
-            result.append(ticker)
-
+        result.append(f"{ticker} {name}" if name else ticker)
     return "\n".join(result)
 
 
 def collect_raw_news():
     raw_items = []
-
     for feed_url in feeds:
         try:
             resp = requests.get(feed_url, headers=headers, timeout=15)
             feed = feedparser.parse(resp.content)
-
             if feed.entries:
                 for entry in feed.entries[:4]:
                     raw_items.append({
@@ -89,16 +77,13 @@ def collect_raw_news():
                     })
             else:
                 print(f"Предупреждение: лента пуста: {feed_url}")
-
         except Exception as e:
             print(f"Ошибка при чтении {feed_url}: {e}")
-
     return raw_items
 
 
 def make_event_input(news_items):
     result = []
-
     for item in news_items:
         result.append(
             f"Источник: {item.get('source', '')}\n"
@@ -106,23 +91,19 @@ def make_event_input(news_items):
             f"Описание: {item.get('summary', '')}\n"
             f"Ссылка: {item.get('link', '')}"
         )
-
     return result
 
 
 def send_to_telegram(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
     if len(text) > 3900:
         text = text[:3900] + "\n\n...сообщение сокращено из-за лимита Telegram."
-
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-
     try:
         res = requests.post(url, json=payload, timeout=15)
         res.raise_for_status()
@@ -138,6 +119,7 @@ print(f"Старт скрипта UTC: {datetime.utcnow()}")
 
 portfolio_data = load_json_file("portfolio.json")
 watchlist_data = load_json_file("watchlist.json")
+cash_log = load_json_file("cash_log.json")
 
 PORTFOLIO_TEXT = format_portfolio(portfolio_data)
 WATCH_LIST = format_watchlist(watchlist_data)
@@ -150,29 +132,26 @@ event_input = make_event_input(processed_news)
 detected_events = detect_events(event_input)
 events_text = format_events_for_prompt(detected_events)
 
-decisions = make_decisions(detected_events, portfolio_data)
+decisions = make_decisions(detected_events, portfolio_data, cash_log)
 decisions_text = format_decisions_for_prompt(decisions)
 
 prompt = f"""
 Ты мой личный инвестиционный помощник v2.0.
 
-Твоя задача — не пересказывать новости, а объяснить решения, которые уже подготовил алгоритм.
+Твоя задача — НЕ принимать решение заново, а коротко оформить уже готовое решение алгоритма.
 
 ЖЕСТКИЕ ПРАВИЛА:
-- Начинай ответ строго с блока <b>🎯 ГЛАВНОЕ НА СЕГОДНЯ</b>.
+- Начинай ответ строго с блока <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>.
 - Не пиши приветствия.
-- Не пиши фразы вроде "давай посмотрим", "я на связи", "сегодня разберем".
+- Не пиши "давай посмотрим", "я на связи", "сегодня разберем".
 - Не выдумывай факты.
-- Не придумывай идеи без новостей или подтверждений.
-- Не спорь с решениями алгоритма без сильной причины.
-- Если алгоритм говорит hold_not_add — пиши "держать, но не наращивать без сильной просадки".
-- Если сильных идей нет — честно напиши: сильных идей для покупки сегодня нет.
-- Не используй сложные термины без объяснения.
-- Максимум 2500 символов.
-- Главный источник решения — блок "Решения алгоритма".
-- Блок новостей используй только для проверки фактов.
-- Не называй подтверждение тренда автоматическим сигналом к покупке.
-- Лучше "ждать", чем слабая покупка.
+- Не спорь с алгоритмом.
+- Не добавляй идеи, которых нет в блоке решений.
+- Не показывай внутренние технические числа вроде "важность 15".
+- Максимум 2300 символов.
+- Сначала решение, потом объяснение.
+- Если рекомендованная покупка 0 $, не предлагай купить.
+- Если актив уже крупный, пиши: держать, но не наращивать без сильной просадки.
 
 Мои портфели:
 
@@ -182,60 +161,46 @@ prompt = f"""
 
 {WATCH_LIST}
 
-Инвестиционные события, найденные алгоритмом:
-
-{events_text}
-
 Решения алгоритма:
 
 {decisions_text}
 
-Полный список новостей за сутки для проверки:
+Инвестиционные события для проверки фактов:
+
+{events_text}
+
+Полный список новостей за сутки только для проверки фактов:
 
 {raw_news}
 
 ФОРМАТ ОТВЕТА ДЛЯ TELEGRAM.
 Используй HTML-теги для жирного текста: <b>текст</b>.
 
-<b>🎯 ГЛАВНОЕ НА СЕГОДНЯ</b>
-<b>Одна короткая строка до 20 слов.</b>
+<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>
+Итог: купить / ждать / продать / ничего не делать.
+Сумма покупки сегодня: X $.
+Причина: одно короткое предложение.
 
-<b>Статус дня:</b>
-🟢 / 🟡 / 🔴 / ⚠️ + короткая причина.
+<b>💰 Инвестиционный бюджет</b>
+Минимальный план месяца, внесено, свободный кэш, сколько можно использовать сегодня.
 
-<b>1️⃣ Что произошло?</b>
-Максимум 3 главных события. Не пересказывай все новости подряд.
+<b>📊 Что делать с портфелем</b>
+Пиши по классам активов, а не длинным списком тикеров:
+- американские акции;
+- уран;
+- энергетика;
+- ИИ и полупроводники;
+- золото/серебро;
+- крипто.
 
-<b>2️⃣ Что влияет на мои деньги?</b>
+<b>🧭 Новые идеи</b>
+Только если алгоритм нашел новые идеи. Если нет — напиши: сильных новых идей сегодня нет.
 
-<b>Freedom:</b>
-Только важное для этого портфеля. Если ничего — напиши: существенных изменений нет.
+<b>🚫 Что сегодня НЕ делать</b>
+До 3 пунктов.
 
-<b>Paidax:</b>
-Только важное для этого портфеля. Если ничего — напиши: существенных изменений нет.
-
-<b>3️⃣ Решение алгоритма</b>
-Коротко объясни главные решения из блока "Решения алгоритма".
-Обязательно учитывай размер позиции.
-
-<b>4️⃣ Watch List</b>
-Пиши только если есть важные изменения по Watch List.
-
-<b>5️⃣ Возможности заработать</b>
-Пиши только новые идеи, которых нет в портфеле.
-Если таких идей нет — прямо напиши: сильных новых идей сегодня нет.
-
-<b>6️⃣ Что сегодня НЕ делать</b>
-1-3 пункта. Например: не усреднять, не покупать на эмоциях, не продавать без причины.
-
-<b>7️⃣ Итог дня</b>
-Выбери только один вариант:
-✅ Купить
-💰 Продать / зафиксировать прибыль
-⏳ Ждать
-❌ Ничего не делать
-
-Объясни максимум в 3 предложениях.
+<b>📰 Почему</b>
+Максимум 3 коротких пункта по событиям дня.
 """
 
 try:
@@ -245,7 +210,6 @@ try:
             contents=prompt,
         )
         analysis_result = response.text
-
     except Exception as e:
         print(f"Ошибка Gemini 2.5 Flash: {e}")
         response = client.models.generate_content(
@@ -253,23 +217,18 @@ try:
             contents=prompt,
         )
         analysis_result = response.text
-
 except Exception as e:
     print(f"Ошибка Gemini: {e}")
-
     analysis_result = f"""
-<b>📈 Личный инвестиционный помощник</b>
+<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>
+Итог: ⏳ Ждать
+Сумма покупки сегодня: 0 $
+Причина: Gemini временно недоступен, нельзя принимать решения без объяснения.
 
-Gemini временно недоступен.
-
+<b>Технически</b>
 Собрано новостей: {len(processed_news)}
 Найдено событий: {len(detected_events)}
-Решений алгоритма: {len(decisions)}
-
-Рекомендация:
-⏳ Ждать. Не принимать решений без анализа.
 """
 
 send_to_telegram(analysis_result)
-
 print(f"Финиш скрипта UTC: {datetime.utcnow()}")
