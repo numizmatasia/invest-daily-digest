@@ -7,7 +7,7 @@ from google import genai
 
 from news_processor import process_news, format_news_for_prompt
 from event_engine import detect_events, format_events_for_prompt
-from decision_engine import make_decisions, format_decisions_for_prompt
+from decision_engine import make_daily_decision, format_daily_decision_for_prompt
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -57,7 +57,10 @@ def format_watchlist(watchlist_data):
     for item in watchlist_data.get("watchlist", []):
         ticker = item.get("ticker", "")
         name = item.get("name", "")
-        result.append(f"{ticker} {name}" if name else ticker)
+        if name:
+            result.append(f"{ticker} {name}")
+        else:
+            result.append(ticker)
     return "\n".join(result)
 
 
@@ -67,13 +70,14 @@ def collect_raw_news():
         try:
             resp = requests.get(feed_url, headers=headers, timeout=15)
             feed = feedparser.parse(resp.content)
+
             if feed.entries:
                 for entry in feed.entries[:4]:
                     raw_items.append({
                         "source": feed_url,
                         "title": getattr(entry, "title", ""),
                         "summary": getattr(entry, "summary", ""),
-                        "link": getattr(entry, "link", "")
+                        "link": getattr(entry, "link", ""),
                     })
             else:
                 print(f"Предупреждение: лента пуста: {feed_url}")
@@ -96,14 +100,17 @@ def make_event_input(news_items):
 
 def send_to_telegram(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
     if len(text) > 3900:
         text = text[:3900] + "\n\n...сообщение сокращено из-за лимита Telegram."
+
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
+
     try:
         res = requests.post(url, json=payload, timeout=15)
         res.raise_for_status()
@@ -132,26 +139,26 @@ event_input = make_event_input(processed_news)
 detected_events = detect_events(event_input)
 events_text = format_events_for_prompt(detected_events)
 
-decisions = make_decisions(detected_events, portfolio_data, cash_log)
-decisions_text = format_decisions_for_prompt(decisions)
+daily_decision = make_daily_decision(detected_events, portfolio_data, cash_log)
+daily_decision_text = format_daily_decision_for_prompt(daily_decision)
 
 prompt = f"""
 Ты мой личный инвестиционный помощник v2.0.
 
-Твоя задача — НЕ принимать решение заново, а коротко оформить уже готовое решение алгоритма.
+Твоя задача — НЕ принимать решение заново, а кратко объяснить решение, которое уже подготовил алгоритм.
 
 ЖЕСТКИЕ ПРАВИЛА:
 - Начинай ответ строго с блока <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>.
 - Не пиши приветствия.
-- Не пиши "давай посмотрим", "я на связи", "сегодня разберем".
+- Не пиши фразы вроде "давай посмотрим", "я на связи", "сегодня разберем".
 - Не выдумывай факты.
-- Не спорь с алгоритмом.
-- Не добавляй идеи, которых нет в блоке решений.
-- Не показывай внутренние технические числа вроде "важность 15".
-- Максимум 2300 символов.
-- Сначала решение, потом объяснение.
-- Если рекомендованная покупка 0 $, не предлагай купить.
-- Если актив уже крупный, пиши: держать, но не наращивать без сильной просадки.
+- Не спорь с решением алгоритма.
+- Не показывай внутренние слова вроде BUY_CANDIDATE, WAIT, importance, score.
+- Не называй подтверждение тренда сигналом к покупке.
+- Если рекомендуемая покупка 0 $, не предлагай купить.
+- Если сильных новых идей нет — прямо напиши: сильных новых идей сегодня нет.
+- Максимум 2200 символов.
+- Пиши простым русским языком.
 
 Мои портфели:
 
@@ -161,11 +168,11 @@ prompt = f"""
 
 {WATCH_LIST}
 
-Решения алгоритма:
+Решение алгоритма:
 
-{decisions_text}
+{daily_decision_text}
 
-Инвестиционные события для проверки фактов:
+Инвестиционные события, найденные алгоритмом:
 
 {events_text}
 
@@ -177,30 +184,28 @@ prompt = f"""
 Используй HTML-теги для жирного текста: <b>текст</b>.
 
 <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>
-Итог: купить / ждать / продать / ничего не делать.
-Сумма покупки сегодня: X $.
-Причина: одно короткое предложение.
+⏳ Ждать / ✅ Купить / 💰 Продать / ❌ Ничего не делать
+
+<b>Сумма покупки сегодня:</b>
+0 $ или сумма из решения алгоритма.
+
+<b>Почему:</b>
+1-2 коротких предложения.
 
 <b>💰 Инвестиционный бюджет</b>
-Минимальный план месяца, внесено, свободный кэш, сколько можно использовать сегодня.
+Минимальный ориентир месяца, внесено, свободный кэш, что делать с пополнением.
 
-<b>📊 Что делать с портфелем</b>
-Пиши по классам активов, а не длинным списком тикеров:
-- американские акции;
-- уран;
-- энергетика;
-- ИИ и полупроводники;
-- золото/серебро;
-- крипто.
+<b>📊 Портфель по классам активов</b>
+Коротко по классам активов, не перечисляй каждую бумагу без необходимости.
 
-<b>🧭 Новые идеи</b>
-Только если алгоритм нашел новые идеи. Если нет — напиши: сильных новых идей сегодня нет.
+<b>🧭 Новые возможности</b>
+Только новые идеи вне портфеля. Если нет — напиши, что сильных новых идей нет.
 
 <b>🚫 Что сегодня НЕ делать</b>
-До 3 пунктов.
+1-3 пункта.
 
-<b>📰 Почему</b>
-Максимум 3 коротких пункта по событиям дня.
+<b>Итог:</b>
+Одна короткая финальная фраза.
 """
 
 try:
@@ -221,14 +226,18 @@ except Exception as e:
     print(f"Ошибка Gemini: {e}")
     analysis_result = f"""
 <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>
-Итог: ⏳ Ждать
-Сумма покупки сегодня: 0 $
-Причина: Gemini временно недоступен, нельзя принимать решения без объяснения.
+⏳ Ждать
 
-<b>Технически</b>
-Собрано новостей: {len(processed_news)}
-Найдено событий: {len(detected_events)}
+<b>Сумма покупки сегодня:</b>
+0 $
+
+<b>Почему:</b>
+Gemini временно недоступен. Без финального объяснения не принимаем инвестиционных решений.
+
+<b>Итог:</b>
+Ждать и не покупать без анализа.
 """
 
 send_to_telegram(analysis_result)
+
 print(f"Финиш скрипта UTC: {datetime.utcnow()}")

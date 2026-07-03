@@ -1,36 +1,16 @@
-from datetime import datetime
-
-
 ASSET_CLASSES = {
-    "us_equity_core": {
-        "title": "Американские акции / широкий рынок",
-        "tickers": ["SPY", "VT", "QQQM", "SPYM", "SPYG", "IXUS"],
-    },
-    "uranium": {
-        "title": "Уран и ядерная энергетика",
-        "tickers": ["CCJ", "UROY", "KZAPD"],
-    },
-    "energy": {
-        "title": "Энергетика / нефть и газ",
-        "tickers": ["XLE"],
-    },
-    "ai_semiconductors": {
-        "title": "ИИ и полупроводники",
-        "tickers": ["NVDA", "AMAT", "VRT", "MU", "AVGO", "SKHY", "PL"],
-    },
-    "precious_metals": {
-        "title": "Золото и серебро",
-        "tickers": ["GLD", "SIVR", "PSLV"],
-    },
-    "crypto": {
-        "title": "Крипто / Bitcoin",
-        "tickers": ["IBIT"],
-    },
+    "Американские акции": ["SPY", "VT", "QQQM", "IXUS", "SPYM", "SPYG"],
+    "Уран и ядерная энергетика": ["CCJ", "UROY", "KZAPD"],
+    "Энергетика": ["XLE"],
+    "ИИ и полупроводники": ["NVDA", "AMAT", "VRT", "MU", "AVGO", "SKHY", "GOOGL", "META", "AMZN"],
+    "Драгоценные металлы": ["SIVR", "PSLV", "GLD"],
+    "Крипта": ["IBIT"],
+    "Прочее": ["CORE", "PL"],
 }
 
-
-def get_current_month_key():
-    return datetime.utcnow().strftime("%Y-%m")
+LARGE_POSITION_LIMIT = 15
+MEDIUM_POSITION_LIMIT = 7
+DEFAULT_MONTHLY_TARGET_USD = 400
 
 
 def get_all_portfolio_tickers(portfolio_data):
@@ -53,246 +33,244 @@ def get_position_weight(portfolio_data, ticker):
 def classify_position_size(weight):
     if weight is None:
         return "unknown"
-    if weight >= 15:
+    if weight >= LARGE_POSITION_LIMIT:
         return "large"
-    if weight >= 7:
+    if weight >= MEDIUM_POSITION_LIMIT:
         return "medium"
     return "small"
 
 
-def portfolio_sector_weight(portfolio_data, tickers):
-    total = 0.0
-    known = False
-    ticker_set = {ticker.upper() for ticker in tickers}
-
-    for positions in portfolio_data.values():
-        for ticker, weight in positions.items():
-            if ticker.upper() in ticker_set and isinstance(weight, (int, float)):
-                total += float(weight)
-                known = True
-
-    return round(total, 2) if known else None
-
-
-def get_cash_status(cash_log):
-    month = get_current_month_key()
-    data = cash_log.get(month)
-
-    if not data and cash_log:
-        month = sorted(cash_log.keys())[-1]
-        data = cash_log.get(month, {})
-
-    if not data:
-        data = {
-            "target_min_usd": 0,
+def get_current_cash_month(cash_log):
+    if not cash_log:
+        return {
+            "target_min_usd": DEFAULT_MONTHLY_TARGET_USD,
             "deposited_usd": 0,
             "invested_usd": 0,
             "cash_left_usd": 0,
         }
-
-    target = data.get("target_min_usd", 0) or 0
-    deposited = data.get("deposited_usd", 0) or 0
-    invested = data.get("invested_usd", 0) or 0
-    cash_left = data.get("cash_left_usd", 0) or 0
-
+    latest_month = sorted(cash_log.keys())[-1]
+    month_data = cash_log.get(latest_month, {})
     return {
-        "month": month,
-        "target_min_usd": target,
-        "deposited_usd": deposited,
-        "invested_usd": invested,
-        "cash_left_usd": cash_left,
-        "shortfall_usd": max(target - deposited, 0),
+        "month": latest_month,
+        "target_min_usd": month_data.get("target_min_usd", DEFAULT_MONTHLY_TARGET_USD),
+        "deposited_usd": month_data.get("deposited_usd", 0),
+        "invested_usd": month_data.get("invested_usd", 0),
+        "cash_left_usd": month_data.get("cash_left_usd", 0),
     }
 
 
-def event_strength(events, asset_tickers):
-    ticker_set = {ticker.upper() for ticker in asset_tickers}
-    strength = 0
-    matched_events = []
+def get_asset_class_for_ticker(ticker):
+    ticker = ticker.upper()
+    for asset_class, tickers in ASSET_CLASSES.items():
+        if ticker in tickers:
+            return asset_class
+    return "Прочее"
+
+
+def calculate_asset_class_weights(portfolio_data):
+    class_weights = {}
+    unknown_positions = {}
+
+    for portfolio_name, positions in portfolio_data.items():
+        for ticker, weight in positions.items():
+            asset_class = get_asset_class_for_ticker(ticker)
+            if weight is None:
+                unknown_positions.setdefault(asset_class, []).append(ticker)
+                continue
+            class_weights[asset_class] = class_weights.get(asset_class, 0) + float(weight)
+
+    return class_weights, unknown_positions
+
+
+def make_decisions(events, portfolio_data):
+    """Оставлено для совместимости с main.py старых версий."""
+    decisions = []
+    portfolio_tickers = get_all_portfolio_tickers(portfolio_data)
 
     for event in events:
-        links = {ticker.upper() for ticker in event.get("portfolio_links", [])}
-        if links & ticker_set:
-            importance = event.get("importance", 0) or 0
-            strength += importance
-            matched_events.append(event.get("title", ""))
+        related_tickers = [ticker.upper() for ticker in event.get("portfolio_links", [])]
+        affected_tickers = [ticker for ticker in related_tickers if ticker in portfolio_tickers]
 
-    return strength, matched_events[:3]
-
-
-def action_from_weight_and_strength(weight, strength):
-    if weight is None:
-        if strength >= 18:
-            return "WATCH", "нет точного размера позиции"
-        return "NO_ACTION", "нет точного размера позиции и нет сильного сигнала"
-
-    if weight >= 20:
-        return "HOLD_NOT_ADD", "доля уже слишком крупная"
-
-    if weight >= 15:
-        return "HOLD_NOT_ADD", "доля уже крупная"
-
-    if weight >= 7:
-        if strength >= 22:
-            return "HOLD", "позиция уже есть; новость подтверждает тренд, но не дает сигнала к докупке"
-        return "HOLD", "позиция уже есть, но сигнал недостаточно сильный"
-
-    if strength >= 28:
-        return "WATCH", "сигнал сильный, но нужна отдельная проверка цены"
-
-    return "WATCH", "наблюдать без покупки"
-
-
-def build_asset_class_decisions(events, portfolio_data):
-    results = []
-
-    for class_id, class_data in ASSET_CLASSES.items():
-        title = class_data["title"]
-        tickers = class_data["tickers"]
-        sector_weight = portfolio_sector_weight(portfolio_data, tickers)
-        strength, matched_events = event_strength(events, tickers)
-
-        if sector_weight is None and strength == 0:
+        if not affected_tickers:
+            decisions.append({
+                "event": event.get("title", ""),
+                "action": "observe",
+                "reason": "Событие не имеет прямой связи с текущими позициями портфеля.",
+                "tickers": related_tickers,
+                "importance": event.get("importance", 0),
+            })
             continue
 
-        if sector_weight is not None:
-            action, reason = action_from_weight_and_strength(sector_weight, strength)
-        else:
-            action = "WATCH" if strength >= 18 else "NO_ACTION"
-            reason = "есть новостной сигнал, но нет позиции в портфеле"
+        for ticker in affected_tickers:
+            portfolio_name, weight = get_position_weight(portfolio_data, ticker)
+            size = classify_position_size(weight)
 
-        results.append({
-            "class_id": class_id,
-            "title": title,
-            "tickers": tickers,
-            "portfolio_weight": sector_weight,
-            "event_strength": strength,
-            "events": matched_events,
+            if size == "large":
+                action = "hold_not_add"
+                reason = f"{ticker} уже занимает крупную долю в портфеле {portfolio_name} ({weight}%). Держать, но не наращивать без сильной просадки."
+            elif size == "medium":
+                action = "hold"
+                reason = f"{ticker} уже есть в портфеле {portfolio_name} ({weight}%). Новость важна, но это не автоматический сигнал к покупке."
+            elif size == "small":
+                action = "watch"
+                reason = f"{ticker} есть в портфеле {portfolio_name}, но доля небольшая ({weight}%). Можно наблюдать, но без покупки на эмоциях."
+            else:
+                action = "watch"
+                reason = f"{ticker} есть в портфеле {portfolio_name}, но размер позиции неизвестен. Без размера позиции нельзя давать точную рекомендацию."
+
+            decisions.append({
+                "event": event.get("title", ""),
+                "action": action,
+                "reason": reason,
+                "tickers": [ticker],
+                "importance": event.get("importance", 0),
+            })
+
+    return decisions
+
+
+def make_daily_decision(events, portfolio_data, cash_log):
+    class_weights, unknown_positions = calculate_asset_class_weights(portfolio_data)
+    cash = get_current_cash_month(cash_log)
+
+    strong_events = [event for event in events if event.get("importance", 0) >= 12]
+    portfolio_tickers = get_all_portfolio_tickers(portfolio_data)
+
+    affected_tickers = set()
+    for event in events:
+        for ticker in event.get("portfolio_links", []):
+            ticker = ticker.upper()
+            if ticker in portfolio_tickers:
+                affected_tickers.add(ticker)
+
+    large_classes = {
+        name: weight for name, weight in class_weights.items()
+        if weight >= LARGE_POSITION_LIMIT
+    }
+
+    asset_class_actions = []
+    for asset_class, weight in sorted(class_weights.items(), key=lambda item: item[1], reverse=True):
+        if weight >= LARGE_POSITION_LIMIT:
+            action = "Держать, не наращивать"
+            reason = "доля уже крупная"
+        elif weight >= MEDIUM_POSITION_LIMIT:
+            action = "Держать"
+            reason = "доля заметная, докупка только при сильном сигнале"
+        else:
+            action = "Наблюдать"
+            reason = "доля небольшая, но сильного сигнала к покупке нет"
+
+        asset_class_actions.append({
+            "asset_class": asset_class,
+            "weight": round(weight, 2),
             "action": action,
             "reason": reason,
         })
 
-    results.sort(key=lambda item: item["event_strength"], reverse=True)
-    return results
+    for asset_class, tickers in unknown_positions.items():
+        asset_class_actions.append({
+            "asset_class": asset_class,
+            "weight": None,
+            "action": "Наблюдать",
+            "reason": "размер позиций неизвестен, точную рекомендацию дать нельзя",
+            "unknown_tickers": tickers,
+        })
 
+    cash_left = cash.get("cash_left_usd", 0)
+    deposited = cash.get("deposited_usd", 0)
+    target = cash.get("target_min_usd", DEFAULT_MONTHLY_TARGET_USD)
+    missing_deposit = max(target - deposited, 0)
 
-def count_strong_new_ideas(events, portfolio_data):
-    portfolio_tickers = get_all_portfolio_tickers(portfolio_data)
-    ideas = []
+    # Покупку разрешаем только при сильном новом событии, которое не раздувает уже крупную долю.
+    has_strong_new_opportunity = False
+    opportunity_note = "Сильных новых идей для покупки сегодня нет."
 
-    for event in events:
-        links = {ticker.upper() for ticker in event.get("portfolio_links", [])}
-        importance = event.get("importance", 0) or 0
+    for event in strong_events:
+        linked = [ticker.upper() for ticker in event.get("portfolio_links", [])]
+        linked_in_portfolio = [ticker for ticker in linked if ticker in portfolio_tickers]
+        if not linked_in_portfolio and event.get("id") == "scout_events":
+            has_strong_new_opportunity = True
+            opportunity_note = "Есть сильное новое событие вне текущего портфеля, но нужна отдельная проверка перед покупкой."
+            break
 
-        if links and links.isdisjoint(portfolio_tickers) and importance >= 20:
-            ideas.append({
-                "title": event.get("title", ""),
-                "importance": importance,
-                "tickers": sorted(links),
-            })
-
-    return ideas[:2]
-
-
-def make_decisions(events, portfolio_data, cash_log=None):
-    cash_log = cash_log or {}
-    cash_status = get_cash_status(cash_log)
-    asset_decisions = build_asset_class_decisions(events, portfolio_data)
-    new_ideas = count_strong_new_ideas(events, portfolio_data)
-
-    best_strength = max([item["event_strength"] for item in asset_decisions], default=0)
-    has_large_hold_not_add = any(item["action"] == "HOLD_NOT_ADD" for item in asset_decisions)
-    has_new_idea = len(new_ideas) > 0
-
-    action_probability = min(max(best_strength * 3, 5), 85)
-
-    final_action = "WAIT"
-    recommended_purchase_usd = 0
-    main_reason = "Нет сигнала, достаточно сильного для покупки сегодня."
-
-    if has_new_idea and cash_status["cash_left_usd"] >= 100:
-        final_action = "BUY_SMALL"
-        recommended_purchase_usd = min(200, cash_status["cash_left_usd"])
-        main_reason = "Есть новая сильная идея и свободный кэш, но размер покупки должен быть ограничен."
-    elif has_new_idea and cash_status["cash_left_usd"] < 100:
+    if has_strong_new_opportunity and cash_left > 0:
+        final_action = "BUY_CANDIDATE"
+        action_text = "Рассмотреть покупку"
+        recommended_purchase_usd = min(cash_left, 200)
+        main_reason = "Есть сильная новая идея и свободный инвестиционный бюджет. Перед покупкой нужна ручная проверка тикера."
+    else:
         final_action = "WAIT"
+        action_text = "Ждать"
         recommended_purchase_usd = 0
-        main_reason = "Есть интересная идея, но свободного кэша недостаточно; сначала нужна отдельная проверка."
-    elif has_large_hold_not_add:
-        final_action = "WAIT"
-        recommended_purchase_usd = 0
-        main_reason = "Крупные позиции уже занимают значимую долю; наращивать без сильной просадки нельзя."
+        if large_classes:
+            main_reason = "Крупные доли уже есть, новых сильных идей алгоритм не нашел. Покупка сейчас не обязательна."
+        else:
+            main_reason = "Есть важные новости, но они не дают достаточно сильного сигнала для покупки сегодня."
 
-    if cash_status["cash_left_usd"] <= 0:
-        recommended_purchase_usd = 0
-
-    market_quality_score = min(max(round(best_strength / 4), 1), 10) if best_strength else 3
+    if missing_deposit > 0:
+        deposit_note = f"До минимального месячного ориентира не хватает {missing_deposit} $. Деньги можно довнести по плану, но не тратить без сильной идеи."
+    else:
+        deposit_note = "Минимальный месячный ориентир по пополнению выполнен."
 
     return {
         "final_action": final_action,
+        "action_text": action_text,
         "recommended_purchase_usd": recommended_purchase_usd,
         "main_reason": main_reason,
-        "market_quality_score": market_quality_score,
-        "action_probability": action_probability,
-        "strong_new_ideas_count": len(new_ideas),
-        "new_ideas": new_ideas,
-        "cash_status": cash_status,
-        "asset_decisions": asset_decisions,
+        "cash": cash,
+        "missing_deposit_usd": missing_deposit,
+        "deposit_note": deposit_note,
+        "asset_class_actions": asset_class_actions,
+        "strong_events_count": len(strong_events),
+        "affected_tickers": sorted(affected_tickers),
+        "opportunity_note": opportunity_note,
     }
 
 
-def human_action(action):
-    mapping = {
-        "WAIT": "⏳ Ждать",
-        "BUY_SMALL": "✅ Купить небольшую позицию",
-        "SELL": "💰 Продать / сократить",
-        "NO_ACTION": "❌ Ничего не делать",
-        "HOLD": "Держать",
-        "HOLD_NOT_ADD": "Держать, но не наращивать",
-        "WATCH": "Наблюдать",
-    }
-    return mapping.get(action, action)
+def format_daily_decision_for_prompt(daily_decision):
+    cash = daily_decision["cash"]
+    lines = []
+
+    lines.append("РЕШЕНИЕ НА СЕГОДНЯ")
+    lines.append(f"Итоговое действие: {daily_decision['action_text']}")
+    lines.append(f"Рекомендуемая покупка сегодня: {daily_decision['recommended_purchase_usd']} $")
+    lines.append(f"Причина: {daily_decision['main_reason']}")
+    lines.append("")
+
+    lines.append("ИНВЕСТИЦИОННЫЙ БЮДЖЕТ")
+    lines.append(f"Месяц: {cash.get('month', 'текущий')}")
+    lines.append(f"Минимальный ориентир пополнения: {cash.get('target_min_usd', DEFAULT_MONTHLY_TARGET_USD)} $")
+    lines.append(f"Внесено в этом месяце: {cash.get('deposited_usd', 0)} $")
+    lines.append(f"Уже инвестировано: {cash.get('invested_usd', 0)} $")
+    lines.append(f"Свободный кэш: {cash.get('cash_left_usd', 0)} $")
+    lines.append(f"Комментарий: {daily_decision['deposit_note']}")
+    lines.append("")
+
+    lines.append("РЕШЕНИЯ ПО КЛАССАМ АКТИВОВ")
+    for item in daily_decision["asset_class_actions"]:
+        if item.get("weight") is None:
+            weight_text = "доля неизвестна"
+        else:
+            weight_text = f"{item['weight']}%"
+        lines.append(f"{item['asset_class']}: {item['action']} ({weight_text}). Причина: {item['reason']}.")
+
+    lines.append("")
+    lines.append("ВОЗМОЖНОСТИ")
+    lines.append(daily_decision["opportunity_note"])
+
+    return "\n".join(lines)
 
 
 def format_decisions_for_prompt(decisions):
     if not decisions:
         return "Алгоритм не нашел решений, требующих действий."
 
-    cash = decisions["cash_status"]
     lines = []
-
-    lines.append("📌 РЕШЕНИЕ НА СЕГОДНЯ")
-    lines.append(f"Итог: {human_action(decisions['final_action'])}")
-    lines.append(f"Рекомендуемая покупка сегодня: {decisions['recommended_purchase_usd']} $")
-    lines.append(f"Причина: {decisions['main_reason']}")
-    lines.append(f"Качество рынка: {decisions['market_quality_score']}/10")
-    lines.append(f"Вероятность действия: {decisions['action_probability']}%")
-    lines.append(f"Сильных новых идей: {decisions['strong_new_ideas_count']}")
-    lines.append("")
-
-    lines.append("💰 ИНВЕСТИЦИОННЫЙ БЮДЖЕТ")
-    lines.append(f"Месяц: {cash['month']}")
-    lines.append(f"Минимальный план пополнения: {cash['target_min_usd']} $")
-    lines.append(f"Внесено: {cash['deposited_usd']} $")
-    lines.append(f"Уже инвестировано: {cash['invested_usd']} $")
-    lines.append(f"Свободный кэш: {cash['cash_left_usd']} $")
-    lines.append(f"До минимального плана не хватает: {cash['shortfall_usd']} $")
-    lines.append("")
-
-    lines.append("📊 РЕШЕНИЯ ПО КЛАССАМ АКТИВОВ")
-    for item in decisions["asset_decisions"][:6]:
-        weight = item["portfolio_weight"]
-        weight_text = "нет точной доли" if weight is None else f"{weight}%"
-        lines.append(f"{item['title']}: {human_action(item['action'])}")
-        lines.append(f"Доля: {weight_text}; причина: {item['reason']}.")
-
-    lines.append("")
-    lines.append("🧭 НОВЫЕ ИДЕИ")
-    if decisions["new_ideas"]:
-        for idea in decisions["new_ideas"]:
-            tickers = ", ".join(idea["tickers"]) if idea["tickers"] else "без тикера"
-            lines.append(f"{idea['title']} ({tickers})")
-    else:
-        lines.append("Сильных новых идей сегодня нет.")
+    for decision in decisions:
+        lines.append(f"Событие: {decision['event']}")
+        lines.append(f"Действие алгоритма: {decision['action']}")
+        lines.append(f"Тикеры: {', '.join(decision['tickers']) if decision['tickers'] else 'нет'}")
+        lines.append(f"Причина: {decision['reason']}")
+        lines.append("")
 
     return "\n".join(lines)
