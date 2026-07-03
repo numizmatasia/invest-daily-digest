@@ -1,8 +1,9 @@
 {
   "2026-07": {
-    "target_min_usd": 400,
     "deposited_usd": 0,
     "invested_usd": 0,
-    "cash_left_usd": 0
+    "cash_left_usd": 0,
+    "monthly_plan_usd": 400,
+    "free_budget_usd": 400
   }
 }

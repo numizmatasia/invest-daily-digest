@@ -2,23 +2,43 @@
   "watchlist": [
     {
       "ticker": "AVGO",
-      "name": "Broadcom"
+      "name": "Broadcom",
+      "status": "WATCH",
+      "priority": 3,
+      "buy_price": null,
+      "max_position_pct": 5
     },
     {
       "ticker": "AMZN",
-      "name": "Amazon"
+      "name": "Amazon",
+      "status": "WATCH",
+      "priority": 3,
+      "buy_price": null,
+      "max_position_pct": 5
     },
     {
       "ticker": "GOOGL",
-      "name": "Alphabet"
+      "name": "Alphabet",
+      "status": "WATCH",
+      "priority": 3,
+      "buy_price": null,
+      "max_position_pct": 5
     },
     {
       "ticker": "SKHY",
-      "name": "SK Hynix"
+      "name": "SK Hynix",
+      "status": "WATCH",
+      "priority": 3,
+      "buy_price": null,
+      "max_position_pct": 5
     },
     {
       "ticker": "META",
-      "name": "Meta"
+      "name": "Meta",
+      "status": "WATCH",
+      "priority": 3,
+      "buy_price": null,
+      "max_position_pct": 5
     }
   ]
 }

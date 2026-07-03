@@ -401,3 +401,6 @@ def format_compact_report(daily_decision):
     ])
 
     return "\n".join(lines)
+
+
+# v1.0 placeholder: priority ranking support enabled in next processing stage.
