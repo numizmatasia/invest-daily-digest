@@ -15,13 +15,13 @@
     "PSLV": 10.71
   },
   "Paidax": {
-    "VT": null,
-    "AMAT": null,
-    "VRT": null,
-    "NVDA": null,
-    "GLD": null,
-    "MU": null,
-    "SPYG": null,
-    "PL": null
+    "AMAT": 31.66,
+    "PL": 21.33,
+    "MU": 17.14,
+    "NVDA": 11.25,
+    "SPYG": 7.45,
+    "VT": 7.23,
+    "GLD": 2.19,
+    "VRT": 1.74
   }
 }
