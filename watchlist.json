@@ -4,7 +4,7 @@
       "ticker": "AVGO",
       "name": "Broadcom",
       "status": "WATCH",
-      "priority": 3,
+      "priority": 2,
       "buy_price": null,
       "max_position_pct": 5
     },
@@ -20,7 +20,7 @@
       "ticker": "GOOGL",
       "name": "Alphabet",
       "status": "WATCH",
-      "priority": 3,
+      "priority": 2,
       "buy_price": null,
       "max_position_pct": 5
     },
@@ -28,7 +28,7 @@
       "ticker": "SKHY",
       "name": "SK Hynix",
       "status": "WATCH",
-      "priority": 3,
+      "priority": 1,
       "buy_price": null,
       "max_position_pct": 5
     },
