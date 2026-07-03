@@ -3,7 +3,7 @@ from datetime import datetime
 
 ASSET_CLASSES = {
     "american_equities": {
-        "name": "Американские акции и ETF",
+        "name": "Американский рынок",
         "tickers": ["SPY", "VT", "QQQM", "IXUS", "SPYM", "SPYG"],
     },
     "uranium_nuclear": {
@@ -75,6 +75,7 @@ def make_decisions(events, portfolio_data):
                 "reason": "Событие не имеет прямой связи с текущими позициями портфеля.",
                 "tickers": related_tickers,
                 "importance": event.get("importance", 0),
+                "portfolio": None,
             })
             continue
 
@@ -101,6 +102,8 @@ def make_decisions(events, portfolio_data):
                 "reason": reason,
                 "tickers": [ticker],
                 "importance": event.get("importance", 0),
+                "portfolio": portfolio_name,
+                "weight": weight,
             })
 
     return decisions
@@ -114,60 +117,129 @@ def _latest_cash_month(cash_log):
     return month, cash_log.get(month, {})
 
 
-def _class_weight(portfolio_data, class_tickers):
-    known_weight = 0.0
-    unknown_tickers = []
-    held_tickers = []
-
-    for portfolio_name, positions in portfolio_data.items():
-        for ticker, weight in positions.items():
-            if ticker.upper() in class_tickers:
-                held_tickers.append(ticker.upper())
-                if weight is None:
-                    unknown_tickers.append(ticker.upper())
-                else:
-                    known_weight += float(weight)
-
-    return round(known_weight, 2), sorted(set(unknown_tickers)), sorted(set(held_tickers))
-
-
-def build_asset_class_summary(portfolio_data):
-    result = []
+def _portfolio_asset_classes(portfolio_name, positions):
+    rows = []
+    normalized = {ticker.upper(): weight for ticker, weight in positions.items()}
 
     for class_id, class_data in ASSET_CLASSES.items():
-        tickers = [ticker.upper() for ticker in class_data["tickers"]]
-        weight, unknown, held = _class_weight(portfolio_data, tickers)
-
+        class_tickers = set(class_data["tickers"])
+        held = [ticker for ticker in normalized if ticker in class_tickers]
         if not held:
             continue
 
-        if weight >= 20:
-            action = "Держать, не увеличивать"
-            reason = "доля уже крупная"
-        elif weight >= 7:
-            action = "Держать"
-            reason = "доля уже заметная"
-        elif unknown and weight == 0:
-            action = "Наблюдать"
-            reason = "размер позиций неизвестен"
-        else:
-            action = "Наблюдать"
-            reason = "сильного сигнала к покупке нет"
+        known_weight = 0.0
+        unknown = []
+        for ticker in held:
+            weight = normalized[ticker]
+            if weight is None:
+                unknown.append(ticker)
+            else:
+                known_weight += float(weight)
 
-        result.append({
+        known_weight = round(known_weight, 2)
+        if unknown and known_weight == 0:
+            action = "наблюдать"
+            note = "размер позиций неизвестен"
+        elif known_weight >= 20:
+            action = "держать, не увеличивать"
+            note = "доля высокая"
+        elif known_weight >= 7:
+            action = "держать"
+            note = "доля заметная"
+        else:
+            action = "наблюдать"
+            note = "сильного сигнала к покупке нет"
+
+        rows.append({
+            "portfolio": portfolio_name,
             "class_id": class_id,
             "name": class_data["name"],
-            "weight": weight,
-            "unknown_tickers": unknown,
-            "held_tickers": held,
+            "tickers": sorted(held),
+            "weight": known_weight,
+            "unknown_tickers": sorted(unknown),
             "action": action,
-            "reason": reason,
+            "note": note,
         })
 
-    return result
+    return rows
 
 
-def build_daily_decision(events, decisions, portfolio_data, cash_log):
+def _portfolio_sections(portfolio_data, decisions):
+    sections = {}
+    for portfolio_name, positions in portfolio_data.items():
+        attention = []
+        for decision in decisions:
+            if decision.get("portfolio") != portfolio_name:
+                continue
+            # Показываем только то, что реально требует внимания. Обычные watch не засоряют отчет.
+            if decision.get("action") == "hold_not_add" and decision.get("importance", 0) >= 12:
+                ticker = decision.get("tickers", [""])[0]
+                attention.append({
+                    "ticker": ticker,
+                    "action": "держать, не увеличивать",
+                    "reason": "доля уже крупная, текущие новости не являются сигналом к докупке",
+                })
+
+        unique_attention = []
+        seen = set()
+        for item in attention:
+            if item["ticker"] not in seen:
+                seen.add(item["ticker"])
+                unique_attention.append(item)
+
+        sections[portfolio_name] = {
+            "attention": unique_attention,
+            "asset_classes": _portfolio_asset_classes(portfolio_name, positions),
+        }
+    return sections
+
+
+def _watchlist_signals(events, watchlist_data):
+    items = watchlist_data.get("watchlist", []) if isinstance(watchlist_data, dict) else []
+    watch_tickers = {item.get("ticker", "").upper(): item.get("name", "") for item in items}
+    if not watch_tickers:
+        return []
+
+    signals = []
+    for event in events:
+        if event.get("importance", 0) < 10:
+            continue
+        related = [ticker.upper() for ticker in event.get("portfolio_links", [])]
+        for ticker in related:
+            if ticker in watch_tickers:
+                signals.append({
+                    "ticker": ticker,
+                    "name": watch_tickers[ticker],
+                    "action": "наблюдать",
+                    "reason": "есть тематический сигнал, но не сигнал к покупке",
+                })
+
+    result = []
+    seen = set()
+    for signal in signals:
+        if signal["ticker"] not in seen:
+            seen.add(signal["ticker"])
+            result.append(signal)
+    return result[:3]
+
+
+def _speculative_ideas(events):
+    # Пока не открываем спекулятивные сделки автоматически: RSS дает много шума.
+    # Если event_engine найдет scout_events, показываем только как наблюдение.
+    ideas = []
+    for event in events:
+        if event.get("id") == "scout_events" and event.get("importance", 0) >= 12:
+            ideas.append({
+                "ticker": "не определен",
+                "action": "проверить вручную",
+                "amount_usd": 0,
+                "risk": "высокий",
+                "reason": "обнаружено рыночное событие типа IPO/ADR/split/M&A, но без надежного тикера покупку не открывать",
+            })
+    return ideas[:2]
+
+
+def build_daily_decision(events, decisions, portfolio_data, cash_log, watchlist_data=None):
     month, cash = _latest_cash_month(cash_log)
 
     target_min = int(cash.get("target_min_usd", 400) or 400)
@@ -176,34 +248,25 @@ def build_daily_decision(events, decisions, portfolio_data, cash_log):
     cash_left = int(cash.get("cash_left_usd", 0) or 0)
     missing = max(target_min - deposited, 0)
 
-    strong_events = [event for event in events if event.get("importance", 0) >= 12]
-    scout_events = [event for event in events if event.get("id") == "scout_events" and event.get("importance", 0) >= 10]
-    has_buy_candidate = bool(scout_events)
+    spec_ideas = _speculative_ideas(events)
+    real_spec_buy = [idea for idea in spec_ideas if idea.get("amount_usd", 0) > 0]
 
-    large_position_count = sum(1 for decision in decisions if decision.get("action") == "hold_not_add")
-
-    if has_buy_candidate and cash_left > 0:
-        action = "BUY_SMALL"
-        action_ru = "✅ Купить небольшую позицию"
-        purchase_amount = min(cash_left, 200)
-        why = "Алгоритм нашел новую идею и есть свободный кэш, но покупка должна быть ограниченной."
+    if real_spec_buy and cash_left > 0:
+        action = "BUY_SPEC"
+        action_ru = "✅ Спекулятивная покупка"
+        purchase_amount = min(cash_left, real_spec_buy[0]["amount_usd"])
+        why = "Есть отдельная спекулятивная идея, но сумма ограничена из-за высокого риска."
     else:
         action = "WAIT"
         action_ru = "⏳ Ждать"
         purchase_amount = 0
-        if large_position_count:
-            why = "В портфеле уже есть крупные доли, а сильных новых идей для покупки сегодня нет."
-        else:
-            why = "Алгоритм не обнаружил идеи, достаточно сильной для покупки сегодня."
-
-    opportunities = "Сильных новых идей для покупки сегодня нет."
-    if scout_events:
-        opportunities = "Есть потенциальные события для наблюдения, но они требуют дополнительного подтверждения перед покупкой."
+        why = "В портфеле уже есть крупные доли, а сильных новых идей для покупки сегодня нет."
 
     return {
         "action": action,
         "action_ru": action_ru,
         "purchase_amount_usd": purchase_amount,
+        "confidence_pct": 88 if purchase_amount == 0 else 76,
         "why": why,
         "budget": {
             "month": month,
@@ -213,13 +276,13 @@ def build_daily_decision(events, decisions, portfolio_data, cash_log):
             "cash_left_usd": cash_left,
             "missing_to_target_usd": missing,
         },
-        "strong_event_count": len(strong_events),
-        "asset_classes": build_asset_class_summary(portfolio_data),
-        "opportunities": opportunities,
+        "portfolio_sections": _portfolio_sections(portfolio_data, decisions),
+        "watchlist_signals": _watchlist_signals(events, watchlist_data or {}),
+        "speculative_ideas": spec_ideas,
         "do_not_do": [
-            "Не совершать покупки активов, если рекомендованная сумма на сегодня равна 0 $.",
             "Не наращивать крупные позиции без сильной просадки.",
             "Не тратить свободный кэш без сильной идеи.",
+            "Не открывать спекулятивные сделки без понятного тикера и ограничения суммы.",
         ],
     }
 
@@ -239,41 +302,34 @@ def format_decisions_for_prompt(decisions):
 
 
 def format_daily_decision_for_prompt(daily_decision):
-    budget = daily_decision["budget"]
-    lines = [
-        "ФИНАЛЬНОЕ РЕШЕНИЕ АЛГОРИТМА:",
-        f"Действие сегодня: {daily_decision['action_ru']}",
-        f"Сумма покупки сегодня: {daily_decision['purchase_amount_usd']} $",
-        f"Причина: {daily_decision['why']}",
-        "",
-        "БЮДЖЕТ:",
-        f"Месяц: {budget['month']}",
-        f"Минимальный ориентир пополнения: {budget['target_min_usd']} $",
-        f"Внесено: {budget['deposited_usd']} $",
-        f"Инвестировано: {budget['invested_usd']} $",
-        f"Свободный кэш: {budget['cash_left_usd']} $",
-        f"Не хватает до ориентира: {budget['missing_to_target_usd']} $",
-        "",
-        "КЛАССЫ АКТИВОВ:",
-    ]
+    return format_compact_report(daily_decision)
 
-    for item in daily_decision["asset_classes"]:
-        weight_text = f"{item['weight']}%" if item["weight"] else "размер неизвестен"
-        unknown = ""
-        if item["unknown_tickers"]:
-            unknown = f"; неизвестные размеры: {', '.join(item['unknown_tickers'])}"
-        lines.append(f"- {item['name']}: {weight_text}; {item['action']}; причина: {item['reason']}{unknown}")
 
-    lines.extend([
-        "",
-        "НОВЫЕ ВОЗМОЖНОСТИ:",
-        daily_decision["opportunities"],
-        "",
-        "ЧТО НЕ ДЕЛАТЬ:",
-    ])
+def _format_portfolio_section(portfolio_name, section):
+    lines = [f"<b>💼 {portfolio_name}</b>"]
 
-    for item in daily_decision["do_not_do"]:
-        lines.append(f"- {item}")
+    attention = section.get("attention", [])
+    if attention:
+        lines.append("⚠️ Требуют внимания:")
+        for item in attention[:3]:
+            lines.append(f"• {item['ticker']}: {item['action']}.")
+            lines.append(f"  Причина: {item['reason']}.")
+    else:
+        lines.append("✅ Все позиции без срочных действий.")
+
+    class_lines = []
+    for row in section.get("asset_classes", [])[:4]:
+        if row.get("unknown_tickers") and row.get("weight", 0) == 0:
+            class_lines.append(f"• {row['name']}: наблюдать, размер позиций неизвестен.")
+        elif row.get("weight", 0) >= 20:
+            class_lines.append(f"• {row['name']}: держать, не увеличивать.")
+        elif row.get("weight", 0) >= 7:
+            class_lines.append(f"• {row['name']}: держать.")
+        else:
+            class_lines.append(f"• {row['name']}: наблюдать.")
+
+    if class_lines:
+        lines.extend(class_lines)
 
     return "\n".join(lines)
 
@@ -281,36 +337,21 @@ def format_daily_decision_for_prompt(daily_decision):
 def format_compact_report(daily_decision):
     budget = daily_decision["budget"]
 
-    asset_lines = []
-    for item in daily_decision.get("asset_classes", []):
-        if item.get("unknown_tickers") and item.get("weight", 0) == 0:
-            asset_lines.append(f"• {item['name']}: наблюдать, размер позиций неизвестен.")
-        elif item.get("weight", 0) >= 20:
-            asset_lines.append(f"• {item['name']}: {item['weight']}% — держать, не увеличивать.")
-        elif item.get("weight", 0) >= 7:
-            asset_lines.append(f"• {item['name']}: {item['weight']}% — держать.")
-        else:
-            asset_lines.append(f"• {item['name']}: {item['weight']}% — наблюдать.")
-
-    if not asset_lines:
-        asset_lines.append("• Существенных данных по классам активов нет.")
-
-    if budget['missing_to_target_usd'] > 0:
+    if daily_decision["purchase_amount_usd"] == 0:
         budget_text = (
-            f"Минимальный ориентир на месяц: {budget['target_min_usd']} $. "
-            f"Внесено: {budget['deposited_usd']} $. "
-            f"До ориентира не хватает: {budget['missing_to_target_usd']} $. "
-            "Пополнить можно по плану, но тратить деньги сегодня не нужно без сильной идеи."
+            f"Минимальный план месяца: {budget['target_min_usd']} $. "
+            "Сегодня пополнять счет не требуется: сильных идей для покупки нет."
         )
     else:
         budget_text = (
-            f"Минимальный ориентир на месяц выполнен: {budget['deposited_usd']} $ из {budget['target_min_usd']} $. "
-            f"Свободный кэш: {budget['cash_left_usd']} $."
+            f"Минимальный план месяца: {budget['target_min_usd']} $. "
+            f"Сегодня использовать: {daily_decision['purchase_amount_usd']} $."
         )
 
     lines = [
         "<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>",
         daily_decision["action_ru"],
+        f"Уверенность алгоритма: {daily_decision['confidence_pct']}%",
         "",
         "<b>Сумма покупки сегодня:</b>",
         f"{daily_decision['purchase_amount_usd']} $",
@@ -321,22 +362,42 @@ def format_compact_report(daily_decision):
         "<b>💰 Инвестиционный бюджет</b>",
         budget_text,
         "",
-        "<b>📊 Портфель по классам активов</b>",
-        *asset_lines[:6],
-        "",
-        "<b>🧭 Новые возможности</b>",
-        daily_decision["opportunities"],
-        "",
-        "<b>🚫 Что сегодня НЕ делать</b>",
     ]
 
+    for portfolio_name, section in daily_decision.get("portfolio_sections", {}).items():
+        lines.append(_format_portfolio_section(portfolio_name, section))
+        lines.append("")
+
+    watchlist = daily_decision.get("watchlist_signals", [])
+    lines.append("<b>👀 Watch List</b>")
+    if watchlist:
+        for item in watchlist:
+            name = f" ({item['name']})" if item.get("name") else ""
+            lines.append(f"• {item['ticker']}{name}: {item['action']}.")
+            lines.append(f"  Причина: {item['reason']}.")
+    else:
+        lines.append("Важных сигналов по Watch List сегодня нет.")
+    lines.append("")
+
+    lines.append("<b>🚀 Спекулятивные идеи</b>")
+    spec = daily_decision.get("speculative_ideas", [])
+    if spec:
+        for item in spec:
+            lines.append(f"• Тикер: {item['ticker']}.")
+            lines.append(f"  Действие: {item['action']}. Сумма: {item['amount_usd']} $. Риск: {item['risk']}.")
+            lines.append(f"  Причина: {item['reason']}.")
+    else:
+        lines.append("Качественных спекулятивных сделок сегодня нет.")
+    lines.append("")
+
+    lines.append("<b>🚫 Сегодня НЕ делать</b>")
     for i, item in enumerate(daily_decision.get("do_not_do", [])[:3], start=1):
         lines.append(f"{i}. {item}")
 
     lines.extend([
         "",
-        "<b>Итог:</b>",
-        "Сегодня действовать не нужно, если сумма покупки равна 0 $." if daily_decision['purchase_amount_usd'] == 0 else "Покупать только в пределах указанной суммы."
+        "<b>План действий:</b>",
+        "Ничего не покупать. Остальные позиции оставить без изменений." if daily_decision['purchase_amount_usd'] == 0 else f"Покупать только в пределах {daily_decision['purchase_amount_usd']} $.",
     ])
 
     return "\n".join(lines)

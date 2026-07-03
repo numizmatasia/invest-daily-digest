@@ -160,7 +160,7 @@ events_text = format_events_for_prompt(detected_events)
 decisions = make_decisions(detected_events, portfolio_data)
 decisions_text = format_decisions_for_prompt(decisions)
 
-daily_decision = build_daily_decision(detected_events, decisions, portfolio_data, cash_log)
+daily_decision = build_daily_decision(detected_events, decisions, portfolio_data, cash_log, watchlist_data)
 daily_decision_text = format_daily_decision_for_prompt(daily_decision)
 compact_report = format_compact_report(daily_decision)
 
