@@ -7,7 +7,13 @@ from google import genai
 
 from news_processor import process_news, format_news_for_prompt
 from event_engine import detect_events, format_events_for_prompt
-from decision_engine import make_daily_decision, format_daily_decision_for_prompt
+from decision_engine import (
+    make_decisions,
+    format_decisions_for_prompt,
+    build_daily_decision,
+    format_daily_decision_for_prompt,
+    format_compact_report,
+)
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -41,31 +47,39 @@ def load_json_file(filename):
 
 def format_portfolio(portfolio_data):
     result = []
+
     for portfolio_name, positions in portfolio_data.items():
         result.append(f"{portfolio_name}:")
+
         for ticker, weight in positions.items():
             if weight is None:
                 result.append(f"{ticker}")
             else:
                 result.append(f"{ticker} {weight}%")
+
         result.append("")
+
     return "\n".join(result)
 
 
 def format_watchlist(watchlist_data):
     result = []
+
     for item in watchlist_data.get("watchlist", []):
         ticker = item.get("ticker", "")
         name = item.get("name", "")
+
         if name:
             result.append(f"{ticker} {name}")
         else:
             result.append(ticker)
+
     return "\n".join(result)
 
 
 def collect_raw_news():
     raw_items = []
+
     for feed_url in feeds:
         try:
             resp = requests.get(feed_url, headers=headers, timeout=15)
@@ -77,17 +91,20 @@ def collect_raw_news():
                         "source": feed_url,
                         "title": getattr(entry, "title", ""),
                         "summary": getattr(entry, "summary", ""),
-                        "link": getattr(entry, "link", ""),
+                        "link": getattr(entry, "link", "")
                     })
             else:
                 print(f"Предупреждение: лента пуста: {feed_url}")
+
         except Exception as e:
             print(f"Ошибка при чтении {feed_url}: {e}")
+
     return raw_items
 
 
 def make_event_input(news_items):
     result = []
+
     for item in news_items:
         result.append(
             f"Источник: {item.get('source', '')}\n"
@@ -95,6 +112,7 @@ def make_event_input(news_items):
             f"Описание: {item.get('summary', '')}\n"
             f"Ссылка: {item.get('link', '')}"
         )
+
     return result
 
 
@@ -139,73 +157,36 @@ event_input = make_event_input(processed_news)
 detected_events = detect_events(event_input)
 events_text = format_events_for_prompt(detected_events)
 
-daily_decision = make_daily_decision(detected_events, portfolio_data, cash_log)
+decisions = make_decisions(detected_events, portfolio_data)
+decisions_text = format_decisions_for_prompt(decisions)
+
+daily_decision = build_daily_decision(detected_events, decisions, portfolio_data, cash_log)
 daily_decision_text = format_daily_decision_for_prompt(daily_decision)
+compact_report = format_compact_report(daily_decision)
 
 prompt = f"""
 Ты мой личный инвестиционный помощник v2.0.
 
-Твоя задача — НЕ принимать решение заново, а кратко объяснить решение, которое уже подготовил алгоритм.
+Твоя задача — аккуратно оформить уже готовое решение алгоритма для Telegram.
 
 ЖЕСТКИЕ ПРАВИЛА:
-- Начинай ответ строго с блока <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>.
+- Не меняй действие алгоритма.
+- Не меняй сумму покупки.
+- Не добавляй новые идеи от себя.
 - Не пиши приветствия.
-- Не пиши фразы вроде "давай посмотрим", "я на связи", "сегодня разберем".
-- Не выдумывай факты.
-- Не спорь с решением алгоритма.
-- Не показывай внутренние слова вроде BUY_CANDIDATE, WAIT, importance, score.
-- Не называй подтверждение тренда сигналом к покупке.
-- Если рекомендуемая покупка 0 $, не предлагай купить.
-- Если сильных новых идей нет — прямо напиши: сильных новых идей сегодня нет.
-- Максимум 2200 символов.
-- Пиши простым русским языком.
+- Не используй фразу "покупки акций". Пиши "покупки активов".
+- Не упоминай внутренние баллы, action/watch/hold и технические детали.
+- Максимум 1500 символов.
+- Начинай строго с <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>.
+- Сохрани структуру готового текста.
 
-Мои портфели:
+ГОТОВЫЙ ТЕКСТ АЛГОРИТМА:
 
-{PORTFOLIO_TEXT}
+{compact_report}
 
-Мой Watch List:
-
-{WATCH_LIST}
-
-Решение алгоритма:
-
-{daily_decision_text}
-
-Инвестиционные события, найденные алгоритмом:
+ДОПОЛНИТЕЛЬНЫЕ ФАКТЫ ДЛЯ ПРОВЕРКИ, НЕ ДЛЯ ПЕРЕСКАЗА:
 
 {events_text}
-
-Полный список новостей за сутки только для проверки фактов:
-
-{raw_news}
-
-ФОРМАТ ОТВЕТА ДЛЯ TELEGRAM.
-Используй HTML-теги для жирного текста: <b>текст</b>.
-
-<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>
-⏳ Ждать / ✅ Купить / 💰 Продать / ❌ Ничего не делать
-
-<b>Сумма покупки сегодня:</b>
-0 $ или сумма из решения алгоритма.
-
-<b>Почему:</b>
-1-2 коротких предложения.
-
-<b>💰 Инвестиционный бюджет</b>
-Минимальный ориентир месяца, внесено, свободный кэш, что делать с пополнением.
-
-<b>📊 Портфель по классам активов</b>
-Коротко по классам активов, не перечисляй каждую бумагу без необходимости.
-
-<b>🧭 Новые возможности</b>
-Только новые идеи вне портфеля. Если нет — напиши, что сильных новых идей нет.
-
-<b>🚫 Что сегодня НЕ делать</b>
-1-3 пункта.
-
-<b>Итог:</b>
-Одна короткая финальная фраза.
 """
 
 try:
@@ -215,6 +196,7 @@ try:
             contents=prompt,
         )
         analysis_result = response.text
+
     except Exception as e:
         print(f"Ошибка Gemini 2.5 Flash: {e}")
         response = client.models.generate_content(
@@ -222,21 +204,33 @@ try:
             contents=prompt,
         )
         analysis_result = response.text
+
 except Exception as e:
     print(f"Ошибка Gemini: {e}")
+
+    budget = daily_decision["budget"]
     analysis_result = f"""
 <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>
-⏳ Ждать
+{daily_decision['action_ru']}
 
 <b>Сумма покупки сегодня:</b>
-0 $
+{daily_decision['purchase_amount_usd']} $
 
 <b>Почему:</b>
-Gemini временно недоступен. Без финального объяснения не принимаем инвестиционных решений.
+{daily_decision['why']}
+
+<b>💰 Инвестиционный бюджет</b>
+Минимальный ориентир: {budget['target_min_usd']} $. Внесено: {budget['deposited_usd']} $. До ориентира не хватает: {budget['missing_to_target_usd']} $.
 
 <b>Итог:</b>
-Ждать и не покупать без анализа.
+Ждать и не принимать решений без анализа.
 """
+
+analysis_result = analysis_result.replace("покупки акций", "покупки активов")
+analysis_result = analysis_result.replace("покупать акции", "покупать активы")
+
+if "<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>" not in analysis_result:
+    analysis_result = compact_report
 
 send_to_telegram(analysis_result)
 
