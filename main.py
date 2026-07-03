@@ -242,8 +242,13 @@ except Exception as e:
 analysis_result = analysis_result.replace("покупки акций", "покупки активов")
 analysis_result = analysis_result.replace("покупать акции", "покупать активы")
 
+now_kz = datetime.now(timezone.utc).astimezone(KZ_TIMEZONE)
+analysis_result += f"\n\n🕒 Создано: {now_kz.strftime('%H:%M:%S')} KZ"
+
 if "<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>" not in analysis_result:
     analysis_result = compact_report
+    now_kz = datetime.now(timezone.utc).astimezone(KZ_TIMEZONE)
+    analysis_result += f"\n\n🕒 Создано: {now_kz.strftime('%H:%M:%S')} KZ"
 
 send_to_telegram(analysis_result)
 
