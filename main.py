@@ -2,7 +2,7 @@ import os
 import json
 import feedparser
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from google import genai
 
 from news_processor import process_news, format_news_for_prompt
@@ -14,6 +14,16 @@ from decision_engine import (
     format_daily_decision_for_prompt,
     format_compact_report,
 )
+
+KZ_TIMEZONE = timezone(timedelta(hours=5))
+
+
+def log_time(label):
+    now_utc = datetime.now(timezone.utc)
+    now_kz = now_utc.astimezone(KZ_TIMEZONE)
+    print(f"{label} UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{label} KZ : {now_kz.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -117,6 +127,8 @@ def make_event_input(news_items):
 
 
 def send_to_telegram(text):
+    log_time("TELEGRAM_SEND_START")
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     if len(text) > 3900:
@@ -133,6 +145,7 @@ def send_to_telegram(text):
         res = requests.post(url, json=payload, timeout=15)
         res.raise_for_status()
         print("Анализ успешно отправлен в Telegram!")
+        log_time("TELEGRAM_SEND_END")
     except Exception as e:
         print(f"Ошибка отправки в Telegram: {e}")
         if "res" in locals():
@@ -140,7 +153,7 @@ def send_to_telegram(text):
         raise e
 
 
-print(f"Старт скрипта UTC: {datetime.utcnow()}")
+log_time("SCRIPT_START")
 
 portfolio_data = load_json_file("portfolio.json")
 watchlist_data = load_json_file("watchlist.json")
@@ -234,4 +247,4 @@ if "<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>" not in analysis_result:
 
 send_to_telegram(analysis_result)
 
-print(f"Финиш скрипта UTC: {datetime.utcnow()}")
+log_time("SCRIPT_FINISH")
