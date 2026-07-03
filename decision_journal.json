@@ -1,5 +1,14 @@
 {
   "version": "1.0",
-  "purpose": "Журнал решений инвестиционного помощника. Используется для фиксации ежедневных рекомендаций и последующей проверки качества советов.",
-  "records": []
+  "purpose": "Journal of daily investment decisions and later performance review. This file replaces a separate performance_tracker.json.",
+  "summary": {
+    "total_decisions": 0,
+    "buy_signals": 0,
+    "sell_signals": 0,
+    "wait_signals": 0,
+    "successful_signals": 0,
+    "failed_signals": 0,
+    "pending_review": 0
+  },
+  "history": []
 }
