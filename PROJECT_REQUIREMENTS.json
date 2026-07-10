@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "project": "INVEST_ASSISTANT_TEMP_SAFETY",
+  "master": "INVEST_ASSISTANT_MASTER_v3.2",
+  "requirements": [
+    {"id": "R01", "name": "Главное действие выводится первым", "blocking": true},
+    {"id": "R02", "name": "Отдельный блок Freedom присутствует всегда", "blocking": true},
+    {"id": "R03", "name": "Отдельный блок Paidax присутствует всегда", "blocking": true},
+    {"id": "R04", "name": "Отдельный Watch List присутствует всегда", "blocking": true},
+    {"id": "R05", "name": "Бюджет 400 USD присутствует всегда", "blocking": true},
+    {"id": "R06", "name": "События объясняются по-русски и связаны с портфелем", "blocking": true},
+    {"id": "R07", "name": "Подтвержденные и непроверенные события различаются", "blocking": true},
+    {"id": "R08", "name": "Количество публикаций и событий не скрывается", "blocking": true},
+    {"id": "R09", "name": "При сбоях источников показывается неполнота данных", "blocking": true},
+    {"id": "R10", "name": "При отсутствии событий сохраняются все обязательные блоки", "blocking": true},
+    {"id": "R11", "name": "Без котировок и фундаментальных данных нет команды купить или продать", "blocking": true},
+    {"id": "R12", "name": "Сырой английский заголовок не попадает в Telegram", "blocking": true},
+    {"id": "R13", "name": "Gemini недоступен — используется русский резервный режим", "blocking": true},
+    {"id": "R14", "name": "Вложенные форматы Freedom и Paidax распознаются", "blocking": true},
+    {"id": "R15", "name": "Telegram-сообщение не превышает безопасный лимит", "blocking": true},
+    {"id": "R16", "name": "Полный mocked end-to-end main завершается отправкой одного корректного сообщения", "blocking": true},
+    {"id": "R17", "name": "Production-запуск блокируется при отсутствии release gate", "blocking": true},
+    {"id": "R18", "name": "Временный контур не импортирует event_engine или decision_engine", "blocking": true}
+  ]
+}
