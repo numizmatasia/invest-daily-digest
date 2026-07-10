@@ -1,7 +1,9 @@
 import os
 import re
 import json
+import time
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -10,13 +12,18 @@ from urllib.parse import urlparse
 import feedparser
 import requests
 
-VERSION = "TEMP-SAFETY-v2.2"
+VERSION = "TEMP-SAFETY-v2.3"
 KZ_TIMEZONE = timezone(timedelta(hours=5))
 LOOKBACK_HOURS = 48
-REQUEST_TIMEOUT = 25
-MAX_REPORT_EVENTS = 12
-MAX_GDELT_RECORDS = 75
+
+RSS_TIMEOUT = 15
+GDELT_TIMEOUT = 25
+GDELT_MIN_INTERVAL_SECONDS = 6
+GDELT_MAX_RECORDS = 250
 GDELT_ENDPOINT = "https://api.gdeltproject.org/api/v2/doc/doc"
+
+MAX_EVENTS_IN_TELEGRAM = 6
+TELEGRAM_SAFE_LIMIT = 3600
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -39,30 +46,43 @@ RSS_FEEDS = [
 
 PRESS_RELEASE_SOURCES = {"PR Newswire", "GlobeNewswire"}
 
-# Временный словарь прямой релевантности. Финальная версия будет вынесена
-# в отдельный каталог инструментов и компаний.
+# Полные названия важнее коротких тикеров: это устраняет ложные совпадения.
 ENTITY_ALIASES = {
-    "SKHY": ["SK Hynix", "SKHY"],
+    "SKHY": ["SK Hynix", "SK hynix"],
     "MU": ["Micron Technology", "Micron"],
     "AMAT": ["Applied Materials"],
     "AVGO": ["Broadcom"],
     "CCJ": ["Cameco"],
     "KZAPD": ["Kazatomprom", "NAC Kazatomprom"],
     "UROY": ["Uranium Royalty"],
-    "IBIT": ["iShares Bitcoin Trust", "Bitcoin ETF"],
-    "SIVR": ["abrdn Physical Silver Shares", "silver ETF"],
+    "IBIT": ["iShares Bitcoin Trust"],
+    "SIVR": ["abrdn Physical Silver Shares"],
     "PSLV": ["Sprott Physical Silver Trust"],
-    "XLE": ["Energy Select Sector SPDR", "US energy stocks"],
+    "XLE": ["Energy Select Sector SPDR"],
+    "SPY": ["SPDR S&P 500 ETF Trust"],
+    "VT": ["Vanguard Total World Stock ETF"],
+    "QQQM": ["Invesco NASDAQ 100 ETF"],
+    "IXUS": ["iShares Core MSCI Total International Stock ETF"],
+    "SPYM": ["SPDR Portfolio S&P 500 ETF"],
 }
 
-TOPIC_QUERIES = {
-    "SEMICONDUCTORS": '("semiconductor" OR "chipmakers" OR "HBM" OR "AI chips")',
-    "ENERGY": '("oil prices" OR "crude oil" OR "OPEC" OR "Iran oil")',
-    "URANIUM": '("uranium" OR "nuclear power")',
-    "PRECIOUS_METALS": '("gold prices" OR "silver prices")',
-    "CRYPTO": '("bitcoin" OR "cryptocurrency market")',
-    "US_MARKET": '("Federal Reserve" OR "US inflation" OR "US jobs report")',
-}
+# Источники для отдельного приоритетного поиска.
+PRIORITY_MEDIA_DOMAINS = [
+    "reuters.com",
+    "bloomberg.com",
+    "apnews.com",
+    "ft.com",
+    "wsj.com",
+    "cnbc.com",
+    "marketwatch.com",
+]
+
+TOPIC_QUERY = (
+    '("semiconductor" OR "chipmakers" OR "HBM" OR "AI chips" '
+    'OR "uranium" OR "nuclear power" OR "oil prices" OR "crude oil" '
+    'OR "gold prices" OR "silver prices" OR "bitcoin" '
+    'OR "Federal Reserve" OR "US inflation" OR "US jobs report")'
+)
 
 EVENT_PATTERNS = {
     "earnings": [
@@ -79,8 +99,12 @@ EVENT_PATTERNS = {
         r"\bbookbuild\b", r"\boversubscrib", r"\bconvertible notes?\b",
         r"\bsenior notes?\b", r"\bprivate placement\b",
         r"\bshare issuance\b", r"\bstock issuance\b",
+        r"\bshare sale\b", r"\bmarket debut\b", r"\bNasdaq debut\b",
+        r"\bring the Nasdaq bell\b", r"\bhit the U\.?S\.? market\b",
     ],
-    "capital_return": [r"\bdividend\b", r"\bbuyback\b", r"\bshare repurchase\b"],
+    "capital_return": [
+        r"\bdividend\b", r"\bbuyback\b", r"\bshare repurchase\b",
+    ],
     "distress": [
         r"\bbankruptcy\b", r"\bchapter 11\b", r"\bdefault\b",
         r"\brestructur", r"\binsolvenc",
@@ -102,7 +126,8 @@ EVENT_PATTERNS = {
         r"\baccident\b", r"\bmine closure\b", r"\bplant closure\b",
     ],
     "contract": [
-        r"\bcontract award\b", r"\bawarded a contract\b", r"\bmajor contract\b",
+        r"\bcontract award\b", r"\bawarded a contract\b",
+        r"\bmajor contract\b",
     ],
     "market_move": [
         r"\bsurges?\b", r"\bslides?\b", r"\brall(?:y|ies)\b",
@@ -123,39 +148,79 @@ EVENT_WEIGHTS = {
     "management": 20,
     "operations": 35,
     "contract": 20,
-    "market_move": 20,
+    "market_move": 18,
     "other": 5,
 }
 
+# Комментарии не должны становиться главным заголовком фактического события.
+OPINION_PATTERNS = [
+    r"\bJim Cramer\b",
+    r"\bwhat I think\b",
+    r"\bmy take\b",
+    r"\bstands on\b",
+    r"\bshould you buy\b",
+    r"\bwhy I am buying\b",
+    r"\bdumping all my\b",
+    r"\brating upgrade\b",
+    r"\brating downgrade\b",
+    r"\banalyst says\b",
+]
+
 OFFICIAL_DOMAINS = {
-    "sec.gov", "federalreserve.gov", "bls.gov", "bea.gov", "eia.gov",
-    "treasury.gov", "nasdaqtrader.com", "fss.or.kr", "krx.co.kr",
-    "nationalbank.kz", "kase.kz", "aix.kz", "iaea.org", "nrc.gov",
+    "sec.gov", "federalreserve.gov", "bls.gov", "bea.gov",
+    "eia.gov", "treasury.gov", "nasdaqtrader.com", "fss.or.kr",
+    "krx.co.kr", "nationalbank.kz", "kase.kz", "aix.kz",
+    "iaea.org", "nrc.gov",
 }
 
 AUTHORITATIVE_MEDIA = {
-    "reuters.com": ("REUTERS", 95),
-    "bloomberg.com": ("BLOOMBERG", 95),
-    "apnews.com": ("AP", 92),
-    "ft.com": ("FINANCIAL_TIMES", 92),
-    "wsj.com": ("WALL_STREET_JOURNAL", 92),
-    "cnbc.com": ("CNBC", 85),
-    "marketwatch.com": ("MARKETWATCH", 78),
+    "reuters.com": ("REUTERS", 98, 1),
+    "bloomberg.com": ("BLOOMBERG", 97, 1),
+    "apnews.com": ("AP", 95, 1),
+    "ft.com": ("FINANCIAL_TIMES", 94, 1),
+    "wsj.com": ("WALL_STREET_JOURNAL", 94, 1),
+    "cnbc.com": ("CNBC", 86, 2),
+    "marketwatch.com": ("MARKETWATCH", 82, 2),
+    "theguardian.com": ("THE_GUARDIAN", 84, 2),
+    "morningstar.com": ("MORNINGSTAR", 84, 2),
+    "koreaherald.com": ("KOREA_HERALD", 82, 2),
+    "yna.co.kr": ("YONHAP", 88, 2),
+    "nikkei.com": ("NIKKEI", 90, 2),
+    "barrons.com": ("BARRONS", 86, 2),
 }
 
 AGGREGATOR_DOMAINS = {
-    "investing.com", "finance.yahoo.com", "msn.com", "news.google.com",
-    "seekingalpha.com",
+    "investing.com", "finance.yahoo.com", "yahoo.com", "msn.com",
+    "news.google.com", "seekingalpha.com", "benzinga.com",
 }
 
 PRESS_RELEASE_DOMAINS = {
     "prnewswire.com", "globenewswire.com", "businesswire.com",
 }
 
+MULTIPART_PUBLIC_SUFFIXES = {
+    "co.kr", "co.uk", "com.sg", "com.au", "co.jp",
+    "com.hk", "com.my", "co.nz", "com.br", "co.in",
+}
+
 STOPWORDS = {
-    "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with",
-    "from", "by", "after", "as", "at", "is", "are", "says", "said", "more",
-    "than", "its", "this", "that", "will", "new", "us", "u", "s",
+    "the", "a", "an", "and", "or", "to", "of", "in", "on", "for",
+    "with", "from", "by", "after", "as", "at", "is", "are", "says",
+    "said", "more", "than", "its", "this", "that", "will", "new",
+    "us", "u", "s",
+}
+
+STRONG_CLUSTER_TYPES = {
+    "earnings",
+    "guidance",
+    "merger_acquisition",
+    "capital_markets",
+    "capital_return",
+    "distress",
+    "regulatory",
+    "legal_sanctions",
+    "management",
+    "operations",
 }
 
 
@@ -165,7 +230,9 @@ def now_kz():
 
 def clean_text(value):
     text = unescape(value or "")
-    return " ".join(text.replace("\n", " ").replace("\r", " ").split()).strip()
+    return " ".join(
+        text.replace("\n", " ").replace("\r", " ").split()
+    ).strip()
 
 
 def load_json_file(filename):
@@ -180,35 +247,46 @@ def load_json_file(filename):
 
 def domain_from_url(url):
     try:
-        host = urlparse(url).netloc.lower()
+        host = urlparse(url).netloc.lower().split(":")[0]
         return host[4:] if host.startswith("www.") else host
     except Exception:
         return ""
 
 
-def root_domain(domain):
-    parts = domain.lower().split(".")
+def registered_domain(domain):
+    domain = (domain or "").lower().strip(".")
+    parts = domain.split(".")
     if len(parts) <= 2:
-        return domain.lower()
-    return ".".join(parts[-2:])
+        return domain
+
+    tail2 = ".".join(parts[-2:])
+    if tail2 in MULTIPART_PUBLIC_SUFFIXES and len(parts) >= 3:
+        return ".".join(parts[-3:])
+
+    return tail2
 
 
 def source_profile(domain, source_name=""):
-    rd = root_domain(domain)
+    rd = registered_domain(domain)
 
-    if any(rd == d or domain.endswith("." + d) for d in OFFICIAL_DOMAINS):
+    if any(
+        rd == item or domain.endswith("." + item)
+        for item in OFFICIAL_DOMAINS
+    ):
         return {
             "group": "OFFICIAL",
             "trust": 100,
+            "tier": 0,
             "kind": "official",
             "counts_as_independent": True,
         }
 
     if rd in AUTHORITATIVE_MEDIA:
-        group, trust = AUTHORITATIVE_MEDIA[rd]
+        group, trust, tier = AUTHORITATIVE_MEDIA[rd]
         return {
             "group": group,
             "trust": trust,
+            "tier": tier,
             "kind": "authoritative_media",
             "counts_as_independent": True,
         }
@@ -217,6 +295,7 @@ def source_profile(domain, source_name=""):
         return {
             "group": "ISSUER_RELEASE",
             "trust": 70,
+            "tier": 4,
             "kind": "issuer_statement",
             "counts_as_independent": False,
         }
@@ -224,16 +303,17 @@ def source_profile(domain, source_name=""):
     if rd in AGGREGATOR_DOMAINS:
         return {
             "group": "AGGREGATOR",
-            "trust": 55,
+            "trust": 50,
+            "tier": 5,
             "kind": "aggregator",
             "counts_as_independent": False,
         }
 
     return {
         "group": f"MEDIA:{rd or source_name.lower()}",
-        "trust": 65,
+        "trust": 62,
+        "tier": 4,
         "kind": "other_media",
-        # Неизвестный сайт не считается независимым подтверждением автоматически.
         "counts_as_independent": False,
     }
 
@@ -265,24 +345,31 @@ def parse_gdelt_datetime(value):
     if not value:
         return None
 
-    value = str(value).strip()
-    formats = (
+    for fmt in (
         "%Y%m%dT%H%M%SZ",
         "%Y%m%d%H%M%S",
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%d %H:%M:%S",
-    )
-    for fmt in formats:
+    ):
         try:
-            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(str(value), fmt).replace(
+                tzinfo=timezone.utc
+            )
         except ValueError:
             pass
+
     return None
 
 
 def normalize_tokens(text):
-    words = re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9]+", clean_text(text).lower())
-    return {word for word in words if len(word) > 2 and word not in STOPWORDS}
+    words = re.findall(
+        r"[a-zA-Zа-яА-ЯёЁ0-9]+",
+        clean_text(text).lower(),
+    )
+    return {
+        word for word in words
+        if len(word) > 2 and word not in STOPWORDS
+    }
 
 
 def title_similarity(left, right):
@@ -295,16 +382,23 @@ def title_similarity(left, right):
 
 def classify_event_type(text):
     for event_type, patterns in EVENT_PATTERNS.items():
-        for pattern in patterns:
-            if re.search(pattern, text, flags=re.IGNORECASE):
-                return event_type
+        if any(
+            re.search(pattern, text, flags=re.IGNORECASE)
+            for pattern in patterns
+        ):
+            return event_type
     return "other"
 
 
+def is_opinion_title(title):
+    return any(
+        re.search(pattern, title, flags=re.IGNORECASE)
+        for pattern in OPINION_PATTERNS
+    )
+
+
 def is_material_press_release(title, summary):
-    combined = f"{title} {summary}"
-    event_type = classify_event_type(combined)
-    return event_type != "other"
+    return classify_event_type(f"{title} {summary}") != "other"
 
 
 def build_user_entities(portfolio_data, watchlist_data):
@@ -312,32 +406,92 @@ def build_user_entities(portfolio_data, watchlist_data):
 
     for positions in portfolio_data.values():
         if isinstance(positions, dict):
-            tickers.update(str(ticker).upper() for ticker in positions)
+            tickers.update(
+                str(ticker).upper().strip()
+                for ticker in positions
+                if str(ticker).strip()
+            )
 
-    watchlist_names = {}
     for item in watchlist_data.get("watchlist", []):
-        if not isinstance(item, dict):
-            continue
-        ticker = str(item.get("ticker", "")).upper().strip()
-        name = clean_text(item.get("name", ""))
-        if ticker:
-            tickers.add(ticker)
-            if name:
-                watchlist_names[ticker] = name
+        if isinstance(item, dict):
+            ticker = str(item.get("ticker", "")).upper().strip()
+            if ticker:
+                tickers.add(ticker)
+
+    # SKHY остается в радаре, пока пользователь ведет отдельную задачу
+    # по этому размещению.
+    tickers.add("SKHY")
 
     entities = {}
     for ticker in sorted(tickers):
-        aliases = list(ENTITY_ALIASES.get(ticker, []))
-        if ticker in watchlist_names:
-            aliases.append(watchlist_names[ticker])
-        aliases.append(ticker)
-        aliases = list(dict.fromkeys(alias for alias in aliases if alias))
-        # Не отправляем неоднозначный короткий тикер в GDELT без названия.
-        searchable = [a for a in aliases if len(a) > 3 or " " in a]
-        if searchable:
-            entities[ticker] = searchable
+        aliases = ENTITY_ALIASES.get(ticker, [])
+        if aliases:
+            entities[ticker] = list(dict.fromkeys(aliases))
 
     return entities
+
+
+def make_entity_query(user_entities):
+    phrases = []
+    for aliases in user_entities.values():
+        if aliases:
+            phrases.append(f'"{aliases[0]}"')
+    return "(" + " OR ".join(phrases) + ")"
+
+
+def fetch_one_rss(source_name, feed_url, cutoff):
+    response = requests.get(
+        feed_url,
+        headers={"User-Agent": "Mozilla/5.0 InvestmentAssistant/2.3"},
+        timeout=RSS_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    feed = feedparser.parse(response.content)
+    if getattr(feed, "bozo", False) and not feed.entries:
+        raise RuntimeError(
+            f"RSS parse error: "
+            f"{getattr(feed, 'bozo_exception', 'unknown')}"
+        )
+
+    articles = []
+    raw_count = 0
+    filtered_pr = 0
+
+    for entry in feed.entries:
+        title = clean_text(getattr(entry, "title", ""))
+        summary = clean_text(getattr(entry, "summary", ""))
+        link = clean_text(getattr(entry, "link", ""))
+        published_at = parse_entry_datetime(entry)
+
+        if not title or published_at is None or published_at < cutoff:
+            continue
+
+        raw_count += 1
+
+        if source_name in PRESS_RELEASE_SOURCES:
+            if not is_material_press_release(title, summary):
+                filtered_pr += 1
+                continue
+
+        articles.append(
+            {
+                "title": title,
+                "summary": summary,
+                "url": link,
+                "domain": domain_from_url(link),
+                "published_at": published_at,
+                "source_name": source_name,
+                "discovery_channel": "RSS",
+            }
+        )
+
+    return {
+        "source": source_name,
+        "articles": articles,
+        "raw_count": raw_count,
+        "filtered_pr": filtered_pr,
+    }
 
 
 def collect_rss():
@@ -345,175 +499,221 @@ def collect_rss():
     articles = []
     working = []
     failed = []
-    stats = {
-        "raw_rss": 0,
-        "filtered_pr": 0,
-    }
+    stats = {"raw_rss": 0, "filtered_pr": 0}
 
-    for source_name, feed_url in RSS_FEEDS:
-        try:
-            response = requests.get(
-                feed_url,
-                headers={"User-Agent": "Mozilla/5.0 InvestmentAssistant/2.2"},
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-            feed = feedparser.parse(response.content)
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {
+            executor.submit(fetch_one_rss, name, url, cutoff): name
+            for name, url in RSS_FEEDS
+        }
 
-            if getattr(feed, "bozo", False) and not feed.entries:
-                raise RuntimeError(
-                    f"RSS parse error: {getattr(feed, 'bozo_exception', 'unknown')}"
+        for future in as_completed(futures):
+            source_name = futures[future]
+            try:
+                result = future.result()
+                articles.extend(result["articles"])
+                stats["raw_rss"] += result["raw_count"]
+                stats["filtered_pr"] += result["filtered_pr"]
+                working.append(
+                    f"{source_name}: {len(result['articles'])}"
+                )
+            except Exception as error:
+                failed.append(
+                    f"{source_name}: {clean_text(str(error))[:160]}"
                 )
 
-            accepted = 0
-            for entry in feed.entries:
-                title = clean_text(getattr(entry, "title", ""))
-                summary = clean_text(getattr(entry, "summary", ""))
-                link = clean_text(getattr(entry, "link", ""))
-                published_at = parse_entry_datetime(entry)
+    working.sort()
+    failed.sort()
+    return articles, working, failed, stats
 
-                if not title or published_at is None or published_at < cutoff:
+
+class GdeltClient:
+    def __init__(self):
+        self.last_request_at = 0.0
+
+    def _wait_for_interval(self):
+        elapsed = time.monotonic() - self.last_request_at
+        remaining = GDELT_MIN_INTERVAL_SECONDS - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+    def search(self, query, label, sort_mode="datedesc"):
+        params = {
+            "query": query,
+            "mode": "artlist",
+            "format": "json",
+            "timespan": f"{LOOKBACK_HOURS}h",
+            "maxrecords": str(GDELT_MAX_RECORDS),
+            "sort": sort_mode,
+        }
+
+        last_error = None
+
+        for attempt in range(1, 3):
+            self._wait_for_interval()
+
+            response = requests.get(
+                GDELT_ENDPOINT,
+                params=params,
+                headers={"User-Agent": "InvestmentAssistant/2.3"},
+                timeout=GDELT_TIMEOUT,
+            )
+            self.last_request_at = time.monotonic()
+
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    wait_seconds = int(retry_after)
+                except (TypeError, ValueError):
+                    wait_seconds = 20
+
+                last_error = RuntimeError(
+                    f"429 Too Many Requests, retry after {wait_seconds}s"
+                )
+                if attempt == 1:
+                    time.sleep(min(max(wait_seconds, 10), 30))
                     continue
 
-                stats["raw_rss"] += 1
+            try:
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as error:
+                last_error = error
+                if attempt == 1:
+                    time.sleep(10)
+                    continue
+                break
 
-                if source_name in PRESS_RELEASE_SOURCES:
-                    if not is_material_press_release(title, summary):
-                        stats["filtered_pr"] += 1
-                        continue
+            articles = []
+            for item in payload.get("articles", []):
+                title = clean_text(item.get("title", ""))
+                url = clean_text(item.get("url", ""))
+                if not title or not url:
+                    continue
 
                 articles.append(
                     {
                         "title": title,
-                        "summary": summary,
-                        "url": link,
-                        "domain": domain_from_url(link),
-                        "published_at": published_at,
-                        "source_name": source_name,
-                        "subject": "",
-                        "direct_user_relevance": False,
-                        "discovery_channel": "RSS",
+                        "summary": "",
+                        "url": url,
+                        "domain": (
+                            clean_text(item.get("domain", ""))
+                            or domain_from_url(url)
+                        ),
+                        "published_at": parse_gdelt_datetime(
+                            item.get("seendate")
+                        ),
+                        "source_name": (
+                            clean_text(item.get("domain", ""))
+                            or "GDELT"
+                        ),
+                        "discovery_channel": f"GDELT:{label}",
                     }
                 )
-                accepted += 1
 
-            working.append(f"{source_name}: {accepted}")
+            return articles
 
-        except Exception as error:
-            failed.append(f"{source_name}: {clean_text(str(error))[:160]}")
-
-    return articles, working, failed, stats
-
-
-def gdelt_request(query, label):
-    params = {
-        "query": query,
-        "mode": "artlist",
-        "format": "json",
-        "timespan": f"{LOOKBACK_HOURS}h",
-        "maxrecords": str(MAX_GDELT_RECORDS),
-        "sort": "datedesc",
-    }
-    response = requests.get(
-        GDELT_ENDPOINT,
-        params=params,
-        headers={"User-Agent": "InvestmentAssistant/2.2"},
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-    payload = response.json()
-
-    articles = []
-    for item in payload.get("articles", []):
-        title = clean_text(item.get("title", ""))
-        url = clean_text(item.get("url", ""))
-        if not title or not url:
-            continue
-
-        articles.append(
-            {
-                "title": title,
-                "summary": "",
-                "url": url,
-                "domain": clean_text(item.get("domain", "")) or domain_from_url(url),
-                "published_at": parse_gdelt_datetime(item.get("seendate")),
-                "source_name": clean_text(item.get("domain", "")) or "GDELT",
-                "subject": label,
-                "direct_user_relevance": label in ENTITY_ALIASES or label.isupper() and label not in TOPIC_QUERIES,
-                "discovery_channel": "GDELT",
-            }
-        )
-
-    return articles
+        raise RuntimeError(f"{label}: {last_error}")
 
 
 def collect_gdelt(user_entities):
+    client = GdeltClient()
     articles = []
     working = []
     failed = []
 
-    # Прямые запросы по портфелю и watchlist.
-    for ticker, aliases in user_entities.items():
-        phrases = [f'"{alias}"' for alias in aliases[:3]]
-        query = "(" + " OR ".join(phrases) + ")"
-        try:
-            found = gdelt_request(query, ticker)
-            articles.extend(found)
-            working.append(f"{ticker}: {len(found)}")
-        except Exception as error:
-            failed.append(f"{ticker}: {clean_text(str(error))[:160]}")
+    entity_query = make_entity_query(user_entities)
 
-    # Тематический радар рынка.
-    for topic, query in TOPIC_QUERIES.items():
+    domain_query = "(" + " OR ".join(
+        f"domainis:{domain}" for domain in PRIORITY_MEDIA_DOMAINS
+    ) + ")"
+
+    searches = [
+        (
+            f"{entity_query} {domain_query}",
+            "PRIORITY_MEDIA",
+            "datedesc",
+        ),
+        (
+            entity_query,
+            "DIRECT_ENTITIES",
+            "hybridrel",
+        ),
+        (
+            TOPIC_QUERY,
+            "MARKET_TOPICS",
+            "datedesc",
+        ),
+    ]
+
+    for query, label, sort_mode in searches:
         try:
-            found = gdelt_request(query, topic)
+            found = client.search(query, label, sort_mode)
             articles.extend(found)
-            working.append(f"{topic}: {len(found)}")
+            working.append(f"{label}: {len(found)}")
         except Exception as error:
-            failed.append(f"{topic}: {clean_text(str(error))[:160]}")
+            failed.append(clean_text(str(error))[:180])
 
     return articles, working, failed
 
 
-def infer_subject(article, user_entities):
-    if article.get("subject"):
-        return article["subject"], bool(article.get("direct_user_relevance"))
+def infer_subjects(article, user_entities):
+    title = clean_text(article.get("title", ""))
+    title_lower = title.lower()
+    matches = []
 
-    title_lower = article["title"].lower()
     for ticker, aliases in user_entities.items():
+        best_alias = None
         for alias in aliases:
-            if alias.lower() in title_lower:
-                return ticker, True
+            pattern = r"(?<!\w)" + re.escape(alias.lower()) + r"(?!\w)"
+            if re.search(pattern, title_lower):
+                if best_alias is None or len(alias) > len(best_alias):
+                    best_alias = alias
+
+        if best_alias:
+            matches.append((ticker, best_alias))
+
+    if matches:
+        # Самое длинное полное название считается главным объектом.
+        matches.sort(key=lambda item: len(item[1]), reverse=True)
+        return [ticker for ticker, _alias in matches], True
 
     topic_checks = {
-        "SEMICONDUCTORS": ["semiconductor", "chipmaker", "hbm", "ai chip"],
+        "SEMICONDUCTORS": [
+            "semiconductor", "chipmaker", "hbm", "ai chip",
+        ],
         "ENERGY": ["oil", "crude", "opec", "iran"],
         "URANIUM": ["uranium", "nuclear"],
         "PRECIOUS_METALS": ["gold", "silver"],
         "CRYPTO": ["bitcoin", "crypto"],
-        "US_MARKET": ["federal reserve", "inflation", "jobs report", "nasdaq", "s&p 500"],
+        "US_MARKET": [
+            "federal reserve", "inflation", "jobs report",
+            "nasdaq", "s&p 500",
+        ],
     }
+
     for topic, terms in topic_checks.items():
         if any(term in title_lower for term in terms):
-            return topic, False
+            return [topic], False
 
-    return "GENERAL", False
+    return ["GENERAL"], False
 
 
 def deduplicate_articles(articles):
-    seen = set()
+    seen_urls = set()
     result = []
 
     for article in articles:
-        key_source = (
-            clean_text(article.get("title", "")).lower(),
-            clean_text(article.get("url", "")).lower(),
-        )
-        raw = f"{key_source[0]}|{key_source[1]}".encode("utf-8", errors="ignore")
+        url = clean_text(article.get("url", "")).lower()
+        title = clean_text(article.get("title", "")).lower()
+
+        raw = f"{url}|{title}".encode("utf-8", errors="ignore")
         key = hashlib.sha256(raw).hexdigest()
-        if key in seen:
+
+        if key in seen_urls:
             continue
-        seen.add(key)
+
+        seen_urls.add(key)
         result.append(article)
 
     return result
@@ -526,46 +726,70 @@ def cluster_articles(articles, user_entities):
         article for article in articles
         if article.get("published_at") is not None
     ]
-    valid_articles.sort(key=lambda x: x["published_at"], reverse=True)
+    valid_articles.sort(
+        key=lambda item: item["published_at"],
+        reverse=True,
+    )
 
     for article in valid_articles:
-        subject, direct = infer_subject(article, user_entities)
-        article["subject"] = subject
-        article["direct_user_relevance"] = direct
-        article["event_type"] = classify_event_type(
-            f"{article.get('title', '')} {article.get('summary', '')}"
+        subjects, direct = infer_subjects(article, user_entities)
+        primary_subject = subjects[0]
+        event_type = classify_event_type(
+            f"{article.get('title', '')} "
+            f"{article.get('summary', '')}"
         )
+        day = article["published_at"].astimezone(
+            KZ_TIMEZONE
+        ).date().isoformat()
+
+        article["subjects"] = subjects
+        article["primary_subject"] = primary_subject
+        article["direct_user_relevance"] = direct
+        article["event_type"] = event_type
         article["source_profile"] = source_profile(
             article.get("domain", ""),
             article.get("source_name", ""),
         )
-        day = article["published_at"].astimezone(KZ_TIMEZONE).date().isoformat()
+        article["is_opinion"] = is_opinion_title(
+            article.get("title", "")
+        )
 
         matched = None
+
         for cluster in clusters:
-            if cluster["subject"] != subject:
+            if cluster["primary_subject"] != primary_subject:
                 continue
-            if cluster["event_type"] != article["event_type"]:
+            if cluster["event_type"] != event_type:
                 continue
             if cluster["day"] != day:
                 continue
-            if title_similarity(cluster["representative_title"], article["title"]) >= 0.22:
+
+            if event_type in STRONG_CLUSTER_TYPES:
+                matched = cluster
+                break
+
+            if title_similarity(
+                cluster["seed_title"],
+                article["title"],
+            ) >= 0.30:
                 matched = cluster
                 break
 
         if matched is None:
             clusters.append(
                 {
-                    "subject": subject,
+                    "primary_subject": primary_subject,
+                    "subjects": set(subjects),
                     "direct_user_relevance": direct,
-                    "event_type": article["event_type"],
+                    "event_type": event_type,
                     "day": day,
-                    "representative_title": article["title"],
+                    "seed_title": article["title"],
                     "articles": [article],
                 }
             )
         else:
             matched["articles"].append(article)
+            matched["subjects"].update(subjects)
             matched["direct_user_relevance"] = (
                 matched["direct_user_relevance"] or direct
             )
@@ -577,11 +801,9 @@ def confirmation_status(cluster):
     independent_groups = set()
     official_present = False
     best_trust = 0
-    source_groups = []
 
     for article in cluster["articles"]:
         profile = article["source_profile"]
-        source_groups.append(profile["group"])
         best_trust = max(best_trust, profile["trust"])
 
         if profile["kind"] == "official":
@@ -601,12 +823,12 @@ def confirmation_status(cluster):
     if len(independent_groups) >= 2:
         return {
             "code": "MULTI_SOURCE_CONFIRMED",
-            "label": "подтверждено 2+ независимыми надежными источниками",
+            "label": "подтверждено 2+ независимыми источниками",
             "independent_count": len(independent_groups),
             "best_trust": best_trust,
         }
 
-    if len(independent_groups) == 1 and best_trust >= 85:
+    if len(independent_groups) == 1 and best_trust >= 82:
         group = next(iter(independent_groups))
         return {
             "code": "RELIABLE_SINGLE_SOURCE",
@@ -615,11 +837,10 @@ def confirmation_status(cluster):
             "best_trust": best_trust,
         }
 
-    # Много перепечаток и агрегаторов не превращают сообщение в подтвержденный факт.
     if len(cluster["articles"]) >= 2:
         return {
             "code": "REPEATED_NOT_INDEPENDENT",
-            "label": "несколько публикаций, независимость не подтверждена",
+            "label": "перепечатки без независимого подтверждения",
             "independent_count": 0,
             "best_trust": best_trust,
         }
@@ -632,13 +853,26 @@ def confirmation_status(cluster):
     }
 
 
+def choose_representative_article(cluster):
+    def rank(article):
+        profile = article["source_profile"]
+        return (
+            1 if article["is_opinion"] else 0,
+            profile["tier"],
+            -profile["trust"],
+            -article["published_at"].timestamp(),
+        )
+
+    return sorted(cluster["articles"], key=rank)[0]
+
+
 def importance_score(cluster, confirmation):
     score = 0
 
     if cluster["direct_user_relevance"]:
         score += 45
-    elif cluster["subject"] != "GENERAL":
-        score += 20
+    elif cluster["primary_subject"] != "GENERAL":
+        score += 18
 
     score += EVENT_WEIGHTS.get(cluster["event_type"], 5)
 
@@ -649,12 +883,16 @@ def importance_score(cluster, confirmation):
     elif confirmation["code"] == "RELIABLE_SINGLE_SOURCE":
         score += 15
     elif confirmation["code"] == "REPEATED_NOT_INDEPENDENT":
-        score += 5
+        score += 4
 
-    newest = max(a["published_at"] for a in cluster["articles"])
+    newest = max(
+        article["published_at"]
+        for article in cluster["articles"]
+    )
     age_hours = (
         datetime.now(timezone.utc) - newest.astimezone(timezone.utc)
     ).total_seconds() / 3600
+
     if age_hours <= 12:
         score += 10
     elif age_hours <= 24:
@@ -669,14 +907,19 @@ def score_and_filter_clusters(clusters):
     for cluster in clusters:
         confirmation = confirmation_status(cluster)
         score = importance_score(cluster, confirmation)
+        representative = choose_representative_article(cluster)
 
-        # Важное правило:
-        # один Reuters/Bloomberg/AP/FT/WSJ-источник по активу пользователя
-        # показывается сразу. Подтверждение компании для показа не требуется.
         include = False
-        if cluster["direct_user_relevance"] and score >= 60:
+
+        # Прямое событие по портфелю/watchlist с сильным типом
+        # показывается даже по одному Reuters/Bloomberg/AP/FT/WSJ.
+        if (
+            cluster["direct_user_relevance"]
+            and cluster["event_type"] in STRONG_CLUSTER_TYPES
+            and score >= 60
+        ):
             include = True
-        elif score >= 70:
+        elif score >= 72:
             include = True
         elif (
             confirmation["code"] in {
@@ -684,40 +927,64 @@ def score_and_filter_clusters(clusters):
                 "MULTI_SOURCE_CONFIRMED",
                 "RELIABLE_SINGLE_SOURCE",
             }
-            and score >= 55
+            and score >= 60
         ):
             include = True
 
+        # Обычное мнение без нового фактического события
+        # не должно занимать основной блок.
+        if (
+            representative["is_opinion"]
+            and cluster["event_type"] == "other"
+        ):
+            include = False
+
         if include:
-            newest = max(a["published_at"] for a in cluster["articles"])
+            newest = max(
+                article["published_at"]
+                for article in cluster["articles"]
+            )
             results.append(
                 {
                     **cluster,
                     "confirmation": confirmation,
                     "score": score,
                     "newest": newest,
+                    "representative": representative,
                 }
             )
 
     results.sort(
-        key=lambda x: (
-            x["direct_user_relevance"],
-            x["score"],
-            x["newest"],
+        key=lambda item: (
+            item["direct_user_relevance"],
+            item["score"],
+            item["newest"],
         ),
         reverse=True,
     )
     return results
 
 
-def source_names(cluster):
-    names = []
+def source_groups(cluster):
+    groups = []
+
     for article in cluster["articles"]:
-        profile = article["source_profile"]
-        name = profile["group"]
-        if name not in names:
-            names.append(name)
-    return names
+        group = article["source_profile"]["group"]
+        if group not in groups:
+            groups.append(group)
+
+    return groups
+
+
+def compact_subject(event):
+    subjects = list(event["subjects"])
+    primary = event["primary_subject"]
+    others = [item for item in subjects if item != primary]
+
+    if not others:
+        return primary
+
+    return f"{primary}; связано: {', '.join(sorted(others)[:2])}"
 
 
 def build_report(rss_status, gdelt_status, stats, events):
@@ -726,67 +993,83 @@ def build_report(rss_status, gdelt_status, stats, events):
 
     lines = [
         "⚠️ ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ ДАЙДЖЕСТ",
-        "",
         f"Версия: {VERSION}",
         "",
-        "Правило подтверждения:",
-        "• официальный источник — подтверждено;",
-        "• 2+ независимых надежных источника — подтверждено;",
-        "• один Reuters/Bloomberg/AP/FT/WSJ по активу пользователя — показывается сразу с маркировкой;",
-        "• перепечатки одного сообщения не считаются независимыми подтверждениями.",
-        "",
-        "📡 Диагностика",
-        f"• RSS работает: {len(rss_working)} из {len(RSS_FEEDS)}",
-        f"• RSS ошибок: {len(rss_failed)}",
-        f"• GDELT-запросов успешно: {len(gdelt_working)}",
-        f"• GDELT-запросов с ошибкой: {len(gdelt_failed)}",
-        f"• Сырых RSS-записей: {stats['raw_rss']}",
-        f"• Отсеяно рекламных пресс-релизов: {stats['filtered_pr']}",
+        (
+            f"📡 RSS {len(rss_working)}/{len(RSS_FEEDS)}; "
+            f"GDELT {len(gdelt_working)}/3; "
+            f"ошибок {len(rss_failed) + len(gdelt_failed)}; "
+            f"рекламных PR отсеяно {stats['filtered_pr']}."
+        ),
         "",
         "🚨 Важные события",
     ]
 
     if not events:
         lines.append(
-            "События с достаточной важностью в доступных источниках не обнаружены. "
-            "Это не означает, что рынок полностью проверен."
+            "События с достаточной важностью в доступных источниках "
+            "не обнаружены. Полнота рынка пока не гарантируется."
         )
     else:
-        for event in events[:MAX_REPORT_EVENTS]:
+        shown = 0
+
+        for event in events:
+            if shown >= MAX_EVENTS_IN_TELEGRAM:
+                break
+
+            representative = event["representative"]
             newest_kz = event["newest"].astimezone(KZ_TIMEZONE)
-            direct_mark = "ПРЯМОЕ" if event["direct_user_relevance"] else "РЫНОЧНОЕ"
+            groups = source_groups(event)
+            title = representative["title"]
+
+            block = [
+                "",
+                f"• {compact_subject(event)} — {title}",
+                (
+                    f"  Важность {event['score']}/100; "
+                    f"{event['confirmation']['label']}."
+                ),
+                (
+                    f"  Группы: {', '.join(groups[:4])}; "
+                    f"публикаций в событии: {len(event['articles'])}; "
+                    f"{newest_kz.strftime('%d.%m %H:%M')} KZ."
+                ),
+            ]
+
+            candidate = "\n".join(lines + block)
+            if len(candidate) > TELEGRAM_SAFE_LIMIT:
+                break
+
+            lines.extend(block)
+            shown += 1
+
+        remaining = len(events) - shown
+        if remaining > 0:
             lines.extend(
                 [
                     "",
-                    f"• [{direct_mark}] {event['subject']} — {event['representative_title']}",
-                    f"  Важность: {event['score']}/100",
-                    f"  Статус: {event['confirmation']['label']}",
-                    f"  Независимых надежных групп: {event['confirmation']['independent_count']}",
-                    f"  Источники/группы: {', '.join(source_names(event))}",
-                    f"  Время: {newest_kz.strftime('%d.%m %H:%M')} KZ",
+                    f"Еще важных событий: {remaining}. "
+                    "Они записаны в логе Actions, а не обрезаны посередине.",
                 ]
             )
-
-    if rss_failed or gdelt_failed:
-        lines.extend(["", "❌ Технические ошибки"])
-        for item in (rss_failed + gdelt_failed)[:8]:
-            lines.append(f"• {item}")
 
     lines.extend(
         [
             "",
-            "⚠️ Ограничение",
-            "Котировки и фундаментальные данные еще не подключены.",
-            "Этот временный контур выявляет события и честно показывает уровень подтверждения, "
-            "но пока не формирует команды на покупку или продажу.",
-            "",
+            "⚠️ Котировки и фундаментальные данные еще не подключены. "
+            "Эта версия выявляет события, но не дает команд покупать "
+            "или продавать.",
             f"🕒 Создано: {now_kz().strftime('%H:%M:%S')} KZ",
         ]
     )
 
     text = "\n".join(lines)
-    if len(text) > 3900:
-        text = text[:3800] + "\n\n...сообщение сокращено из-за лимита Telegram."
+
+    if len(text) > TELEGRAM_SAFE_LIMIT:
+        raise RuntimeError(
+            f"Telegram report exceeded safe limit: {len(text)}"
+        )
+
     return text
 
 
@@ -799,17 +1082,59 @@ def send_to_telegram(text):
     }
 
     last_error = None
+
     for attempt in range(1, 3):
         try:
-            response = requests.post(url, json=payload, timeout=20)
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=20,
+            )
             response.raise_for_status()
             print(f"Telegram sent, attempt {attempt}")
             return
         except Exception as error:
             last_error = error
-            print(f"Telegram error, attempt {attempt}: {error}")
+            print(
+                f"Telegram error, attempt {attempt}: {error}"
+            )
 
-    raise RuntimeError(f"Telegram delivery failed: {last_error}")
+    raise RuntimeError(
+        f"Telegram delivery failed: {last_error}"
+    )
+
+
+def print_diagnostics(
+    rss_working,
+    rss_failed,
+    gdelt_working,
+    gdelt_failed,
+    events,
+):
+    print("RSS WORKING:")
+    for item in rss_working:
+        print(f"  {item}")
+
+    print("RSS FAILED:")
+    for item in rss_failed:
+        print(f"  {item}")
+
+    print("GDELT WORKING:")
+    for item in gdelt_working:
+        print(f"  {item}")
+
+    print("GDELT FAILED:")
+    for item in gdelt_failed:
+        print(f"  {item}")
+
+    print(f"EVENTS SELECTED: {len(events)}")
+    for event in events:
+        print(
+            f"  {event['primary_subject']} | "
+            f"{event['event_type']} | "
+            f"{event['score']} | "
+            f"{event['representative']['title']}"
+        )
 
 
 def main():
@@ -817,14 +1142,29 @@ def main():
 
     portfolio_data = load_json_file("portfolio.json")
     watchlist_data = load_json_file("watchlist.json")
-    user_entities = build_user_entities(portfolio_data, watchlist_data)
+    user_entities = build_user_entities(
+        portfolio_data,
+        watchlist_data,
+    )
 
     rss_articles, rss_working, rss_failed, stats = collect_rss()
-    gdelt_articles, gdelt_working, gdelt_failed = collect_gdelt(user_entities)
+    gdelt_articles, gdelt_working, gdelt_failed = collect_gdelt(
+        user_entities
+    )
 
-    articles = deduplicate_articles(rss_articles + gdelt_articles)
+    articles = deduplicate_articles(
+        rss_articles + gdelt_articles
+    )
     clusters = cluster_articles(articles, user_entities)
     events = score_and_filter_clusters(clusters)
+
+    print_diagnostics(
+        rss_working,
+        rss_failed,
+        gdelt_working,
+        gdelt_failed,
+        events,
+    )
 
     report = build_report(
         (rss_working, rss_failed),
@@ -832,6 +1172,7 @@ def main():
         stats,
         events,
     )
+
     print(report)
     send_to_telegram(report)
 
