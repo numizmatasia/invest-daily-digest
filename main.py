@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 import re
 import json
 import time
@@ -8,17 +10,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
+from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 import feedparser
 import requests
 
-VERSION = "TEMP-SAFETY-v2.7.1"
+VERSION = "TEMP-SAFETY-v2.9"
+RELEASE_GATE_SCHEMA_VERSION = "1.0"
+MONTHLY_BUDGET_USD = 400
 KZ_TIMEZONE = timezone(timedelta(hours=5))
 LOOKBACK_HOURS = 48
 REQUEST_TIMEOUT = 12
 TELEGRAM_TIMEOUT = 20
-MAX_EVENTS_IN_TELEGRAM = 4
+MAX_CONFIRMED_EVENTS = 2
+MAX_RESEARCH_EVENTS = 1
+MAX_EVENTS_IN_TELEGRAM = MAX_CONFIRMED_EVENTS + MAX_RESEARCH_EVENTS
 TELEGRAM_SAFE_LIMIT = 3600
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -359,16 +366,30 @@ def is_material_press_release(title, summary):
 
 def build_user_entities(portfolio_data, watchlist_data):
     tickers = set()
-    for positions in portfolio_data.values():
-        if isinstance(positions, dict):
-            tickers.update(str(ticker).upper().strip() for ticker in positions if str(ticker).strip())
-    for item in watchlist_data.get("watchlist", []):
-        if isinstance(item, dict):
-            ticker = str(item.get("ticker", "")).upper().strip()
-            if ticker:
-                tickers.add(ticker)
+
+    def scan(value):
+        if isinstance(value, dict):
+            direct_ticker = str(value.get("ticker", "")).upper().strip()
+            if direct_ticker in ENTITY_ALIASES:
+                tickers.add(direct_ticker)
+            for key, nested in value.items():
+                ticker = str(key).upper().strip()
+                if ticker in ENTITY_ALIASES:
+                    tickers.add(ticker)
+                scan(nested)
+        elif isinstance(value, list):
+            for item in value:
+                scan(item)
+
+    scan(portfolio_data)
+    scan(watchlist_data)
     tickers.add("SKHY")
-    return {ticker: list(dict.fromkeys(ENTITY_ALIASES[ticker])) for ticker in sorted(tickers) if ticker in ENTITY_ALIASES}
+
+    return {
+        ticker: list(dict.fromkeys(ENTITY_ALIASES[ticker]))
+        for ticker in sorted(tickers)
+        if ticker in ENTITY_ALIASES
+    }
 
 
 def google_news_url(query):
@@ -815,29 +836,45 @@ def importance_score(cluster, confirmation):
     return min(score, 100)
 
 
-def score_and_filter_clusters(clusters):
-    results = []
+def classify_event_buckets(clusters):
+    confirmed = []
+    research = []
     accepted_statuses = {
         "OFFICIAL_CONFIRMED",
         "MULTI_SOURCE_CONFIRMED",
         "RELIABLE_SINGLE_SOURCE",
         "ISSUER_STATEMENT",
     }
+    research_statuses = {
+        "REPEATED_NOT_INDEPENDENT",
+        "UNVERIFIED_SINGLE_SOURCE",
+    }
+    research_event_types = STRONG_CLUSTER_TYPES | {"contract", "market_move"}
 
     for cluster in clusters:
         confirmation = confirmation_status(cluster)
         score = importance_score(cluster, confirmation)
         representative = choose_representative_article(cluster)
 
-        include = False
+        base = {
+            **cluster,
+            "confirmation": confirmation,
+            "score": score,
+            "newest": max(
+                article["published_at"]
+                for article in cluster["articles"]
+            ),
+            "representative": representative,
+        }
 
+        is_confirmed = False
         if (
             cluster["direct_user_relevance"]
             and cluster["event_type"] in STRONG_CLUSTER_TYPES
             and confirmation["code"] in accepted_statuses
             and score >= 60
         ):
-            include = True
+            is_confirmed = True
         elif (
             not cluster["direct_user_relevance"]
             and cluster["primary_subject"] != "GENERAL"
@@ -848,31 +885,44 @@ def score_and_filter_clusters(clusters):
             }
             and score >= 60
         ):
-            include = True
+            is_confirmed = True
 
-        if include:
-            results.append(
-                {
-                    **cluster,
-                    "confirmation": confirmation,
-                    "score": score,
-                    "newest": max(
-                        article["published_at"]
-                        for article in cluster["articles"]
-                    ),
-                    "representative": representative,
-                }
-            )
+        if is_confirmed:
+            base["display_tier"] = "CONFIRMED"
+            confirmed.append(base)
+            continue
 
-    return sorted(
-        results,
-        key=lambda item: (
-            item["direct_user_relevance"],
-            item["score"],
-            item["newest"],
-        ),
-        reverse=True,
+        # Не скрываем фактические материалы, относящиеся к портфелю,
+        # только потому, что источник пока один или публикации зависимы.
+        # Они идут в отдельный блок проверки, а не смешиваются с подтвержденными.
+        if (
+            cluster["direct_user_relevance"]
+            and cluster["event_type"] in research_event_types
+            and confirmation["code"] in research_statuses
+            and score >= 50
+        ):
+            base["display_tier"] = "RESEARCH"
+            research.append(base)
+
+    sort_key = lambda item: (
+        item["direct_user_relevance"],
+        item["score"],
+        item["newest"],
     )
+    confirmed.sort(key=sort_key, reverse=True)
+    research.sort(key=sort_key, reverse=True)
+    return confirmed, research
+
+
+def select_events_for_report(confirmed, research):
+    selected = confirmed[:MAX_CONFIRMED_EVENTS]
+    selected.extend(research[:MAX_RESEARCH_EVENTS])
+    return selected
+
+
+def score_and_filter_clusters(clusters):
+    confirmed, research = classify_event_buckets(clusters)
+    return select_events_for_report(confirmed, research)
 
 
 def source_groups(cluster):
@@ -948,6 +998,255 @@ def collect_ticker_locations(portfolio_data, watchlist_data):
     # Пока SKHY ведется как отдельная задача пользователя, сохраняем его в списке наблюдения.
     locations["SKHY"]["watchlist"] = True
     return locations
+
+
+def extract_account_positions(portfolio_data):
+    accounts = {}
+
+    def scan(value, result):
+        if isinstance(value, dict):
+            direct_ticker = str(value.get("ticker", "")).upper().strip()
+            if direct_ticker in ENTITY_ALIASES:
+                result.add(direct_ticker)
+            for key, nested in value.items():
+                ticker = str(key).upper().strip()
+                if ticker in ENTITY_ALIASES:
+                    result.add(ticker)
+                scan(nested, result)
+        elif isinstance(value, list):
+            for item in value:
+                scan(item, result)
+
+    if isinstance(portfolio_data, dict):
+        for account_name, positions in portfolio_data.items():
+            tickers = set()
+            scan(positions, tickers)
+            accounts[str(account_name)] = sorted(tickers)
+
+    return accounts
+
+
+def extract_watchlist_positions(watchlist_data):
+    tickers = []
+    if isinstance(watchlist_data, dict):
+        for item in watchlist_data.get("watchlist", []):
+            if isinstance(item, dict):
+                ticker = str(item.get("ticker", "")).upper().strip()
+                if ticker in ENTITY_ALIASES and ticker not in tickers:
+                    tickers.append(ticker)
+    if "SKHY" not in tickers:
+        tickers.append("SKHY")
+    return sorted(tickers)
+
+
+def event_actions_by_ticker(events, event_analyses):
+    result = {}
+    for index, event in enumerate(events):
+        if index >= len(event_analyses):
+            continue
+        analysis = event_analyses[index]
+        for subject in event.get("subjects", []):
+            if subject not in ENTITY_ALIASES:
+                continue
+            result.setdefault(subject, []).append(
+                {
+                    "action_code": analysis.get("action_code", "RESEARCH"),
+                    "title_ru": trim_text(analysis.get("title_ru", subject), 90),
+                    "impact_label": analysis.get("impact_label", "Неясное"),
+                    "tier": event.get("display_tier", "CONFIRMED"),
+                }
+            )
+    return result
+
+
+def account_display_name(name):
+    value = clean_text(name)
+    lower = value.lower()
+    if "freedom" in lower:
+        return "Freedom"
+    if "paidax" in lower:
+        return "Paidax"
+    return value or "Портфель"
+
+
+def normalize_core_accounts(account_positions):
+    normalized = {
+        "Freedom": {"found": False, "tickers": set()},
+        "Paidax": {"found": False, "tickers": set()},
+    }
+    extras = []
+
+    for raw_name, tickers in account_positions.items():
+        display = account_display_name(raw_name)
+        ticker_set = set(tickers)
+        if display in normalized:
+            normalized[display]["found"] = True
+            normalized[display]["tickers"].update(ticker_set)
+        else:
+            extras.append((display, sorted(ticker_set), True))
+
+    result = [
+        ("Freedom", sorted(normalized["Freedom"]["tickers"]), normalized["Freedom"]["found"]),
+        ("Paidax", sorted(normalized["Paidax"]["tickers"]), normalized["Paidax"]["found"]),
+    ]
+    result.extend(extras)
+    return result
+
+
+def portfolio_lines(account_positions, watchlist_tickers, events, event_analyses):
+    action_map = event_actions_by_ticker(events, event_analyses)
+    lines = ["", "📊 Влияние на мои инвестиции"]
+
+    for name, tickers, found in normalize_core_accounts(account_positions):
+        lines.append(f"• {name}")
+        if not found:
+            lines.append(
+                "  Данные этого портфеля в portfolio.json не распознаны. "
+                "Вывод о влиянии делать нельзя."
+            )
+            continue
+
+        affected = [ticker for ticker in tickers if ticker in action_map]
+        unaffected = [ticker for ticker in tickers if ticker not in action_map]
+
+        if affected:
+            for ticker in affected:
+                item = action_map[ticker][0]
+                label = ACTION_LABELS_RU.get(
+                    item["action_code"],
+                    "ПРОВЕРИТЬ ДОПОЛНИТЕЛЬНО",
+                )
+                lines.append(f"  {ticker}: {label} — {item['title_ru']}")
+        else:
+            lines.append(
+                "  По доступным источникам новых существенных событий по позициям не найдено."
+            )
+
+        if unaffected:
+            lines.append(
+                "  Без новых существенных событий: "
+                + ", ".join(unaffected)
+                + "."
+            )
+
+    lines.append("• Watch List")
+    affected_watch = [ticker for ticker in watchlist_tickers if ticker in action_map]
+    unaffected_watch = [ticker for ticker in watchlist_tickers if ticker not in action_map]
+
+    if affected_watch:
+        for ticker in affected_watch:
+            item = action_map[ticker][0]
+            label = ACTION_LABELS_RU.get(
+                item["action_code"],
+                "ПРОВЕРИТЬ ДОПОЛНИТЕЛЬНО",
+            )
+            lines.append(f"  {ticker}: {label} — {item['title_ru']}")
+    else:
+        lines.append(
+            "  По доступным источникам новых существенных событий не найдено."
+        )
+
+    if unaffected_watch:
+        lines.append(
+            "  Без новых существенных событий: "
+            + ", ".join(unaffected_watch)
+            + "."
+        )
+
+    return lines
+
+def information_background_lines(account_positions, watchlist_tickers, events, event_analyses):
+    action_map = event_actions_by_ticker(events, event_analyses)
+
+    def background_for(tickers):
+        labels = []
+        has_research = False
+        for ticker in tickers:
+            for item in action_map.get(ticker, []):
+                labels.append(item.get("impact_label", "Неясное"))
+                if item.get("tier") == "RESEARCH":
+                    has_research = True
+        if not labels:
+            return "нейтральный: новых подтвержденных событий не найдено"
+        if has_research:
+            return "неясный: есть сообщение, которое требует проверки"
+        unique = set(labels)
+        if "Отрицательное" in unique and "Положительное" in unique:
+            return "смешанный"
+        if "Смешанное" in unique or len(unique) > 1:
+            return "смешанный"
+        if unique == {"Положительное"}:
+            return "положительный информационный фон"
+        if unique == {"Отрицательное"}:
+            return "отрицательный информационный фон"
+        return "неясный: требуется дополнительная проверка"
+
+    lines = ["", "📊 Информационный фон, не прогноз цены"]
+    for raw_name, tickers in sorted(
+        account_positions.items(),
+        key=lambda item: (
+            0 if "freedom" in item[0].lower() else
+            1 if "paidax" in item[0].lower() else 2,
+            item[0].lower(),
+        ),
+    ):
+        lines.append(
+            f"• {account_display_name(raw_name)}: {background_for(tickers)}."
+        )
+    lines.append(
+        f"• Watch List: {background_for(watchlist_tickers)}."
+    )
+    return lines
+
+
+def overall_action(event_analyses):
+    if not event_analyses:
+        return (
+            "ДЕЙСТВИЙ НЕТ",
+            "Подтвержденных изменений, требующих действий, не обнаружено.",
+        )
+
+    priority = {
+        "RESEARCH": 4,
+        "WATCH": 3,
+        "HOLD": 2,
+        "NO_ACTION": 1,
+    }
+    chosen = max(
+        event_analyses,
+        key=lambda item: priority.get(item.get("action_code", "RESEARCH"), 4),
+    )
+    code = chosen.get("action_code", "RESEARCH")
+    label = ACTION_LABELS_RU.get(code, "ПРОВЕРИТЬ ДОПОЛНИТЕЛЬНО")
+    reason = trim_text(
+        chosen.get("action_reason_ru", "Требуется дополнительная проверка."),
+        260,
+    )
+    return label, reason
+
+
+def budget_lines():
+    return [
+        "",
+        "💰 Инвестиционный бюджет",
+        f"• Минимальный план месяца: {MONTHLY_BUDGET_USD} $.",
+        (
+            "• Сегодня: не распределять бюджет автоматически. "
+            "Котировки, свободный остаток и допустимый размер сделки пока не подключены."
+        ),
+    ]
+
+
+def opportunity_lines():
+    return [
+        "",
+        "🔎 Новые возможности",
+        (
+            "Кандидаты на покупку временным контуром не формируются: "
+            "для этого нужны проверенные котировки, фундаментальные данные, "
+            "ликвидность и расчет размера позиции."
+        ),
+    ]
 
 
 def relation_text(event, ticker_locations):
@@ -1038,7 +1337,13 @@ def build_gemini_events(events, ticker_locations):
                 "confirmation": event.get("confirmation", {}).get("label", "статус не определен"),
                 "sources": source_groups(event)[:5],
                 "portfolio_relation": relation_text(event, ticker_locations),
+                "verification_tier": event.get("display_tier", "CONFIRMED"),
                 "source_titles": titles,
+                "source_summaries": [
+                    trim_text(article.get("summary", ""), 260)
+                    for article in event.get("articles", [])[:3]
+                    if clean_text(article.get("summary", ""))
+                ],
             }
         )
     return payload
@@ -1121,13 +1426,15 @@ def analyze_events_in_russian(events, ticker_locations):
         "Если заголовков недостаточно, прямо напиши: 'Недостаточно данных в заголовках'. "
         "Для каждого события объясни: что произошло; какое отношение оно имеет к указанным позициям или списку наблюдения; "
         "каково вероятное направление влияния — Положительное, Отрицательное, Смешанное или Неясное; почему; что отслеживать дальше. "
+        "Поле verification_tier=RESEARCH означает, что событие нельзя подавать как подтвержденный факт: "
+        "для него action_code должен быть RESEARCH, а текст должен прямо указывать, что требуется проверка. "
         "Также выбери один служебный статус: NO_ACTION, HOLD, WATCH или RESEARCH. "
         "NO_ACTION — событие не меняет инвестиционный тезис и не требует наблюдения; "
         "HOLD — событие относится к уже имеющейся позиции, но оснований менять ее нет; "
         "WATCH — есть понятное условие, за которым нужно наблюдать; "
         "RESEARCH — событие важно, но требует проверки параметров или независимого подтверждения. "
         "Не используй BUY или SELL. Направление влияния — не прогноз цены и не команда купить или продать. "
-        "Каждое текстовое поле — максимум 180 символов. Сохрани исходный index.\n\n"
+        "Каждое текстовое поле — максимум 130 символов. Сохрани исходный index.\n\n"
         + json.dumps(input_events, ensure_ascii=False)
     )
 
@@ -1207,23 +1514,31 @@ def analyze_events_in_russian(events, ticker_locations):
             if 0 <= index < len(selected):
                 by_index[index] = {
                     "index": index,
-                    "title_ru": trim_text(item.get("title_ru", ""), 180),
-                    "what_happened_ru": trim_text(item.get("what_happened_ru", ""), 190),
-                    "relevance_ru": trim_text(item.get("relevance_ru", ""), 190),
+                    "title_ru": trim_text(item.get("title_ru", ""), 100),
+                    "what_happened_ru": trim_text(item.get("what_happened_ru", ""), 140),
+                    "relevance_ru": trim_text(item.get("relevance_ru", ""), 130),
                     "impact_label": item.get("impact_label", "Неясное"),
-                    "impact_reason_ru": trim_text(item.get("impact_reason_ru", ""), 190),
-                    "watch_ru": trim_text(item.get("watch_ru", ""), 180),
+                    "impact_reason_ru": trim_text(item.get("impact_reason_ru", ""), 130),
+                    "watch_ru": trim_text(item.get("watch_ru", ""), 110),
                     "action_code": item.get("action_code", "RESEARCH"),
-                    "action_reason_ru": trim_text(item.get("action_reason_ru", ""), 190),
+                    "action_reason_ru": trim_text(item.get("action_reason_ru", ""), 120),
                 }
 
         result = []
         for index, backup in enumerate(fallback):
             candidate = by_index.get(index)
             if not candidate or not valid_russian_analysis(candidate, selected[index]):
-                result.append(backup)
+                chosen = backup
             else:
-                result.append(candidate)
+                chosen = candidate
+
+            if selected[index].get("display_tier") == "RESEARCH":
+                chosen["action_code"] = "RESEARCH"
+                if "провер" not in chosen.get("action_reason_ru", "").lower():
+                    chosen["action_reason_ru"] = (
+                        "Источник или независимость сообщения недостаточны; параметры события нужно проверить."
+                    )
+            result.append(chosen)
 
         return result, f"{GEMINI_MODEL}: русский разбор выполнен"
 
@@ -1241,91 +1556,178 @@ def build_report(
     event_analyses,
     gemini_status,
     elapsed_seconds,
+    account_positions,
+    watchlist_tickers,
+    coverage_stats,
 ):
-    lines = [
+    action_label, action_reason = overall_action(event_analyses)
+
+    fixed_before_events = [
         "⚠️ ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ ДАЙДЖЕСТ",
         f"Версия: {VERSION}",
         "",
-        f"📡 RSS {len(base_working)}/{len(BASE_FEEDS)}; радар {len(radar_working)}/3; ошибок {len(failures)}.",
-        (
-            f"🧹 Отсеяно: рекламных PR {stats['filtered_pr']}; "
-            f"низкокачественных источников {stats['filtered_low_quality']}; "
-            f"мнений/кликбейта {stats['filtered_opinion']}."
-        ),
-        f"🧠 Обработка текста: {gemini_status}.",
-        f"⏱ Сбор и анализ: {elapsed_seconds:.1f} сек.",
-        "",
-        "🚨 События, которые имеют понятную связь с вашими инвестициями",
+        "📋 Что делать сегодня",
+        f"{action_label}. {action_reason}",
     ]
-
-    if not events:
-        lines.append(
-            "События с достаточной важностью в доступных источниках не обнаружены. "
-            "Полнота рынка пока не гарантируется."
+    fixed_after_events = []
+    fixed_after_events.extend(
+        portfolio_lines(
+            account_positions,
+            watchlist_tickers,
+            events,
+            event_analyses,
         )
-    else:
-        shown = 0
-        for index, event in enumerate(events[:MAX_EVENTS_IN_TELEGRAM]):
-            analysis = event_analyses[index]
-            newest_kz = event["newest"].astimezone(KZ_TIMEZONE)
-            block = [
-                "",
-                f"• {analysis['title_ru']}",
-                f"  Что произошло: {analysis['what_happened_ru']}",
-                f"  Для портфеля: {analysis['relevance_ru']}",
-                f"  Возможное влияние: {analysis['impact_label']} — {analysis['impact_reason_ru']}",
-                f"  Что отслеживать: {analysis['watch_ru']}",
-                (
-                    f"  Статус: {ACTION_LABELS_RU[analysis['action_code']]}. "
-                    f"{analysis['action_reason_ru']}"
-                ),
-                (
-                    f"  Проверка: {event['confirmation']['label']}; "
-                    f"источники: {', '.join(source_groups(event)[:4])}; "
-                    f"{newest_kz.strftime('%d.%m %H:%M')} KZ."
-                ),
-            ]
-            if len("\n".join(lines + block)) > TELEGRAM_SAFE_LIMIT:
-                break
-            lines.extend(block)
-            shown += 1
-
-        if len(events) > shown:
-            lines.extend(
-                [
-                    "",
-                    "Менее значимые события исключены из сообщения, чтобы не перегружать дайджест.",
-                ]
-            )
+    )
+    fixed_after_events.extend(budget_lines())
+    fixed_after_events.extend(opportunity_lines())
+    fixed_after_events.extend(
+        [
+            "",
+            "🧭 Полнота данных",
+            (
+                f"• RSS {len(base_working)}/{len(BASE_FEEDS)}; "
+                f"радар {len(radar_working)}/3; ошибок {len(failures)}."
+            ),
+            (
+                f"• Отсеяно: рекламных PR {stats['filtered_pr']}; "
+                f"низкокачественных источников {stats['filtered_low_quality']}; "
+                f"мнений/кликбейта {stats['filtered_opinion']}."
+            ),
+            (
+                f"• После фильтра: публикаций {coverage_stats['articles_after_quality']}; "
+                f"событий {coverage_stats['clusters_total']}; "
+                f"подтвержденных {coverage_stats['confirmed_total']}; "
+                f"требуют проверки {coverage_stats['research_total']}."
+            ),
+            f"• Обработка текста: {gemini_status}.",
+            f"• Сбор и анализ: {elapsed_seconds:.1f} сек.",
+        ]
+    )
 
     if failures:
-        lines.extend(["", "❌ Не сработали:"])
+        fixed_after_events.extend(["", "❌ Не сработали:"])
         for failure in failures[:3]:
-            lines.append(f"• {failure['name']}: {failure['error'][:90]}")
+            fixed_after_events.append(
+                f"• {failure['name']}: {failure['error'][:90]}"
+            )
 
-    lines.extend(
+    fixed_after_events.extend(
         [
             "",
             (
-                "⚠️ Это оценка возможного влияния событий, а не прогноз цены. "
-                "Котировки и фундаментальные данные еще не подключены, поэтому команд покупать или продавать нет."
+                "⚠️ Информационный фон не является прогнозом цены. "
+                "Котировки и фундаментальные данные еще не подключены, "
+                "поэтому команд покупать или продавать нет."
             ),
             f"🕒 Создано: {now_kz().strftime('%H:%M:%S')} KZ",
         ]
     )
 
-    text = "\n".join(lines)
-    if len(text) > TELEGRAM_SAFE_LIMIT:
-        raise RuntimeError(f"Telegram report exceeded safe limit: {len(text)}")
+    event_lines = ["", "🔄 Что изменилось"]
+    confirmed_indices = [
+        index for index, event in enumerate(events)
+        if event.get("display_tier") == "CONFIRMED"
+    ]
+    research_indices = [
+        index for index, event in enumerate(events)
+        if event.get("display_tier") == "RESEARCH"
+    ]
 
-    for event in events[:MAX_EVENTS_IN_TELEGRAM]:
+    if not confirmed_indices and not research_indices:
+        event_lines.append(
+            "Подтвержденных изменений и сообщений, требующих проверки, не найдено."
+        )
+
+    def event_block(index, research=False):
+        event = events[index]
+        analysis = event_analyses[index]
+        newest_kz = event["newest"].astimezone(KZ_TIMEZONE)
+        prefix = "🟡 Требует проверки" if research else "•"
+        return [
+            "",
+            f"{prefix} {analysis['title_ru']}",
+            f"  Что произошло: {analysis['what_happened_ru']}",
+            f"  Для портфеля: {analysis['relevance_ru']}",
+            f"  Влияние: {analysis['impact_label']} — {analysis['impact_reason_ru']}",
+            f"  Контроль: {analysis['watch_ru']}",
+            (
+                f"  Статус: {ACTION_LABELS_RU[analysis['action_code']]}. "
+                f"{analysis['action_reason_ru']}"
+            ),
+            (
+                f"  Проверка: {event['confirmation']['label']}; "
+                f"источники: {', '.join(source_groups(event)[:4])}; "
+                f"{newest_kz.strftime('%d.%m %H:%M')} KZ."
+            ),
+        ]
+
+    # Mandatory sections are preserved. Events are added only while the whole
+    # message remains inside the Telegram safety limit.
+    for index in confirmed_indices:
+        candidate = event_lines + event_block(index, research=False)
+        whole = fixed_before_events + candidate + fixed_after_events
+        if len("\n".join(whole)) <= TELEGRAM_SAFE_LIMIT:
+            event_lines = candidate
+        else:
+            break
+
+    for index in research_indices:
+        candidate = event_lines + event_block(index, research=True)
+        whole = fixed_before_events + candidate + fixed_after_events
+        if len("\n".join(whole)) <= TELEGRAM_SAFE_LIMIT:
+            event_lines = candidate
+        else:
+            break
+
+    shown_events = sum(
+        1 for line in event_lines
+        if line.startswith("• ") or line.startswith("🟡 Требует проверки ")
+    )
+    hidden_events = len(events) - shown_events
+    if hidden_events > 0:
+        notice = (
+            f"Еще отобрано событий: {hidden_events}. Они не скрыты как несуществующие: "
+            "количество отражено в блоке полноты данных, но подробности не помещены в одно сообщение."
+        )
+        candidate = event_lines + ["", notice]
+        whole = fixed_before_events + candidate + fixed_after_events
+        if len("\n".join(whole)) <= TELEGRAM_SAFE_LIMIT:
+            event_lines = candidate
+
+    lines = fixed_before_events + event_lines + fixed_after_events
+    text = "\n".join(lines)
+
+    if len(text) > TELEGRAM_SAFE_LIMIT:
+        raise RuntimeError(
+            f"Telegram report exceeded safe limit: {len(text)}"
+        )
+
+    required_sections = [
+        "📋 Что делать сегодня",
+        "🔄 Что изменилось",
+        "📊 Влияние на мои инвестиции",
+        "• Freedom",
+        "• Paidax",
+        "• Watch List",
+        "💰 Инвестиционный бюджет",
+        "🔎 Новые возможности",
+        "🧭 Полнота данных",
+    ]
+    missing = [section for section in required_sections if section not in text]
+    if missing:
+        raise RuntimeError(
+            "Release contract broken; missing sections: " + ", ".join(missing)
+        )
+
+    for event in events:
         for article in event.get("articles", []):
             raw_title = clean_text(article.get("title", ""))
-            if len(raw_title) >= 24 and raw_title.lower() in text.lower():
-                raise RuntimeError("Raw source title leaked into Telegram report")
+            if raw_title and len(raw_title) >= 20 and raw_title in text:
+                raise RuntimeError(
+                    "Raw source title leaked into Telegram report"
+                )
 
     return text
-
 
 def send_to_telegram(text):
     response = requests.post(
@@ -1335,6 +1737,40 @@ def send_to_telegram(text):
     )
     response.raise_for_status()
     print("Telegram sent")
+
+
+def run_release_gate_or_stop():
+    gate_path = Path(__file__).with_name("test_release_gate.py")
+    requirements_path = Path(__file__).with_name("PROJECT_REQUIREMENTS.json")
+
+    if not gate_path.exists():
+        raise RuntimeError(
+            "Release gate is missing: test_release_gate.py"
+        )
+    if not requirements_path.exists():
+        raise RuntimeError(
+            "Release requirements are missing: PROJECT_REQUIREMENTS.json"
+        )
+
+    environment = os.environ.copy()
+    environment["RELEASE_GATE_TARGET"] = str(Path(__file__).resolve())
+    result = subprocess.run(
+        [sys.executable, str(gate_path)],
+        cwd=str(Path(__file__).resolve().parent),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    if result.stdout:
+        print(result.stdout)
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr)
+        raise RuntimeError(
+            "RELEASE GATE FAILED. Digest execution is blocked."
+        )
 
 
 def main():
@@ -1351,7 +1787,19 @@ def main():
     articles, quality_stats = quality_filter_articles(articles)
     stats.update(quality_stats)
     clusters = cluster_articles(articles, entities)
-    events = score_and_filter_clusters(clusters)
+    confirmed_events, research_events = classify_event_buckets(clusters)
+    events = select_events_for_report(
+        confirmed_events,
+        research_events,
+    )
+    account_positions = extract_account_positions(portfolio_data)
+    watchlist_tickers = extract_watchlist_positions(watchlist_data)
+    coverage_stats = {
+        "articles_after_quality": len(articles),
+        "clusters_total": len(clusters),
+        "confirmed_total": len(confirmed_events),
+        "research_total": len(research_events),
+    }
 
     event_analyses, gemini_status = analyze_events_in_russian(
         events,
@@ -1363,7 +1811,7 @@ def main():
     print("RADAR:", *radar_working, sep="\n  ")
     print("FAILURES:", *[f"{x['name']}: {x['error']}" for x in failures], sep="\n  ")
     print(f"GEMINI: {gemini_status}")
-    print(f"EVENTS SELECTED: {len(events)}")
+    print(f"EVENTS SELECTED: {len(events)}; CONFIRMED TOTAL: {len(confirmed_events)}; RESEARCH TOTAL: {len(research_events)}")
     for index, event in enumerate(events):
         analysis_title = (
             event_analyses[index]["title_ru"]
@@ -1384,6 +1832,9 @@ def main():
         event_analyses,
         gemini_status,
         elapsed,
+        account_positions,
+        watchlist_tickers,
+        coverage_stats,
     )
     print(report)
     send_to_telegram(report)
@@ -1394,4 +1845,5 @@ def main():
 
 
 if __name__ == "__main__":
+    run_release_gate_or_stop()
     main()
