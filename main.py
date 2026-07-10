@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urlparse
 import feedparser
 import requests
 
-VERSION = "TEMP-SAFETY-v2.7"
+VERSION = "TEMP-SAFETY-v2.7.1"
 KZ_TIMEZONE = timezone(timedelta(hours=5))
 LOOKBACK_HOURS = 48
 REQUEST_TIMEOUT = 12
@@ -174,6 +174,33 @@ def now_kz():
 def clean_text(value):
     text = unescape(value or "")
     return " ".join(text.replace("\n", " ").replace("\r", " ").split()).strip()
+
+
+
+def normalize_tokens(text):
+    """Return normalized meaningful words for title comparison."""
+    words = re.findall(
+        r"[a-zA-Zа-яА-ЯёЁ0-9]+",
+        clean_text(text).lower(),
+    )
+    return {
+        word
+        for word in words
+        if len(word) > 2 and word not in STOPWORDS
+    }
+
+
+def title_similarity(left, right):
+    """Jaccard similarity for clustering headlines about the same event."""
+    left_tokens = normalize_tokens(left)
+    right_tokens = normalize_tokens(right)
+
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    return len(left_tokens & right_tokens) / len(
+        left_tokens | right_tokens
+    )
 
 
 def load_json_file(filename):
