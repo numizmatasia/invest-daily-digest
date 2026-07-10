@@ -1,255 +1,256 @@
 import os
-import json
+import hashlib
+from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
+from html import unescape
+
 import feedparser
 import requests
-from datetime import datetime, timezone, timedelta
-from google import genai
 
-from news_processor import process_news, format_news_for_prompt
-from event_engine import detect_events, format_events_for_prompt
-from decision_engine import (
-    make_decisions,
-    format_decisions_for_prompt,
-    build_daily_decision,
-    format_daily_decision_for_prompt,
-    format_compact_report,
-)
-
+VERSION = "TEMP-SAFETY-v2.0"
 KZ_TIMEZONE = timezone(timedelta(hours=5))
-
-
-def log_time(label):
-    now_utc = datetime.now(timezone.utc)
-    now_kz = now_utc.astimezone(KZ_TIMEZONE)
-    print(f"{label} UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{label} KZ : {now_kz.strftime('%Y-%m-%d %H:%M:%S')}")
-
+LOOKBACK_HOURS = 48
+MAX_ITEMS_IN_REPORT = 20
+REQUEST_TIMEOUT = 20
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-feeds = [
-    "https://world-nuclear-news.org/rss",
-    "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://seekingalpha.com/feed.xml",
-    "https://www.investing.com/rss/news.rss",
-    "https://oilprice.com/rss/main",
-    "https://techcrunch.com/feed/",
-    "https://www.marketwatch.com/rss/topstories",
-    "https://www.prnewswire.com/rss/news-releases-list.rss",
-    "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies",
+FEEDS = [
+    ("World Nuclear News", "https://world-nuclear-news.org/rss"),
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("Seeking Alpha", "https://seekingalpha.com/feed.xml"),
+    ("Investing.com", "https://www.investing.com/rss/news.rss"),
+    ("OilPrice", "https://oilprice.com/rss/main"),
+    ("TechCrunch", "https://techcrunch.com/feed/"),
+    ("MarketWatch", "https://www.marketwatch.com/rss/topstories"),
+    ("PR Newswire", "https://www.prnewswire.com/rss/news-releases-list.rss"),
+    (
+        "GlobeNewswire",
+        "https://www.globenewswire.com/RssFeed/orgclass/1/"
+        "feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies",
+    ),
 ]
 
-headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    )
+}
 
 
-def load_json_file(filename):
-    try:
-        with open(filename, "r", encoding="utf-8") as file:
-            return json.load(file)
-    except Exception as e:
-        print(f"Ошибка чтения файла {filename}: {e}")
-        return {}
+def now_kz():
+    return datetime.now(timezone.utc).astimezone(KZ_TIMEZONE)
 
 
-def format_portfolio(portfolio_data):
-    result = []
-
-    for portfolio_name, positions in portfolio_data.items():
-        result.append(f"{portfolio_name}:")
-
-        for ticker, weight in positions.items():
-            if weight is None:
-                result.append(f"{ticker}")
-            else:
-                result.append(f"{ticker} {weight}%")
-
-        result.append("")
-
-    return "\n".join(result)
+def clean_text(value):
+    text = unescape(value or "")
+    text = " ".join(text.replace("\n", " ").replace("\r", " ").split())
+    return text.strip()
 
 
-def format_watchlist(watchlist_data):
-    result = []
+def parse_entry_datetime(entry):
+    for attr in ("published_parsed", "updated_parsed", "created_parsed"):
+        value = getattr(entry, attr, None)
+        if value:
+            try:
+                return datetime(*value[:6], tzinfo=timezone.utc)
+            except Exception:
+                pass
 
-    for item in watchlist_data.get("watchlist", []):
-        ticker = item.get("ticker", "")
-        name = item.get("name", "")
+    for attr in ("published", "updated", "created"):
+        value = getattr(entry, attr, None)
+        if value:
+            try:
+                parsed = parsedate_to_datetime(value)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+            except Exception:
+                pass
 
-        if name:
-            result.append(f"{ticker} {name}")
-        else:
-            result.append(ticker)
-
-    return "\n".join(result)
+    return None
 
 
-def collect_raw_news():
-    raw_items = []
+def stable_item_id(title, link):
+    raw = f"{title}|{link}".encode("utf-8", errors="ignore")
+    return hashlib.sha256(raw).hexdigest()
 
-    for feed_url in feeds:
+
+def collect_news():
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
+    working_sources = []
+    failed_sources = []
+    items = []
+    seen = set()
+
+    for source_name, feed_url in FEEDS:
         try:
-            resp = requests.get(feed_url, headers=headers, timeout=15)
-            feed = feedparser.parse(resp.content)
+            response = requests.get(
+                feed_url,
+                headers=HEADERS,
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
 
-            if feed.entries:
-                for entry in feed.entries[:4]:
-                    raw_items.append({
-                        "source": feed_url,
-                        "title": getattr(entry, "title", ""),
-                        "summary": getattr(entry, "summary", ""),
-                        "link": getattr(entry, "link", "")
-                    })
-            else:
-                print(f"Предупреждение: лента пуста: {feed_url}")
+            parsed_feed = feedparser.parse(response.content)
 
-        except Exception as e:
-            print(f"Ошибка при чтении {feed_url}: {e}")
+            if getattr(parsed_feed, "bozo", False) and not parsed_feed.entries:
+                raise RuntimeError(
+                    f"RSS parsing error: {getattr(parsed_feed, 'bozo_exception', 'unknown')}"
+                )
 
-    return raw_items
+            source_count = 0
+
+            for entry in parsed_feed.entries:
+                title = clean_text(getattr(entry, "title", ""))
+                link = clean_text(getattr(entry, "link", ""))
+                published_at = parse_entry_datetime(entry)
+
+                if not title:
+                    continue
+
+                if published_at is None or published_at < cutoff:
+                    continue
+
+                item_id = stable_item_id(title, link)
+                if item_id in seen:
+                    continue
+
+                seen.add(item_id)
+                source_count += 1
+                items.append(
+                    {
+                        "source": source_name,
+                        "title": title,
+                        "link": link,
+                        "published_at": published_at,
+                    }
+                )
+
+            working_sources.append(
+                {
+                    "name": source_name,
+                    "fresh_items": source_count,
+                }
+            )
+
+        except Exception as error:
+            failed_sources.append(
+                {
+                    "name": source_name,
+                    "error": clean_text(str(error))[:180],
+                }
+            )
+
+    items.sort(key=lambda item: item["published_at"], reverse=True)
+    return working_sources, failed_sources, items
 
 
-def make_event_input(news_items):
-    result = []
+def build_report(working_sources, failed_sources, items):
+    total_sources = len(FEEDS)
+    working_count = len(working_sources)
+    failed_count = len(failed_sources)
+    fresh_count = len(items)
 
-    for item in news_items:
-        result.append(
-            f"Источник: {item.get('source', '')}\n"
-            f"Заголовок: {item.get('title', '')}\n"
-            f"Описание: {item.get('summary', '')}\n"
-            f"Ссылка: {item.get('link', '')}"
+    if working_count < 6 or fresh_count == 0:
+        first_line = "⛔ ДАННЫХ НЕДОСТАТОЧНО ДЛЯ ИНВЕСТИЦИОННОГО ВЫВОДА"
+    else:
+        first_line = "⚠️ ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ ДАЙДЖЕСТ"
+
+    lines = [
+        first_line,
+        "",
+        f"Версия: {VERSION}",
+        "",
+        "Этот отчет проверяет только работу старых RSS-источников.",
+        "Он НЕ видит текущие котировки, движение портфеля и весь мировой рынок.",
+        "Поэтому он не выдает команды «покупать», «продавать» или «ждать».",
+        "",
+        "📡 Покрытие источников",
+        f"• Всего настроено: {total_sources}",
+        f"• Сработало: {working_count}",
+        f"• Ошибок: {failed_count}",
+        f"• Свежих записей за {LOOKBACK_HOURS} часов: {fresh_count}",
+    ]
+
+    if failed_sources:
+        lines.extend(["", "❌ Не сработали:"])
+        for source in failed_sources:
+            lines.append(f"• {source['name']}: {source['error']}")
+
+    lines.extend(["", "📰 Последние найденные публикации"])
+
+    if not items:
+        lines.append("Свежие публикации в доступных лентах не найдены.")
+    else:
+        for item in items[:MAX_ITEMS_IN_REPORT]:
+            published_kz = item["published_at"].astimezone(KZ_TIMEZONE)
+            lines.append(
+                f"• {published_kz.strftime('%d.%m %H:%M')} — "
+                f"{item['source']}: {item['title']}"
+            )
+
+    if fresh_count > MAX_ITEMS_IN_REPORT:
+        lines.append(
+            f"• Еще {fresh_count - MAX_ITEMS_IN_REPORT} записей не показаны "
+            "из-за лимита длины сообщения."
         )
 
-    return result
+    lines.extend(
+        [
+            "",
+            "⚠️ Ограничение",
+            "Отсутствие новости в этом сообщении не означает, что события не было.",
+            "До подключения официальных источников, рыночных цен и второго контура "
+            "этот отчет нельзя использовать как профессиональную инвестиционную рекомендацию.",
+            "",
+            f"🕒 Создано: {now_kz().strftime('%H:%M:%S')} KZ",
+        ]
+    )
+
+    return "\n".join(lines)
 
 
 def send_to_telegram(text):
-    log_time("TELEGRAM_SEND_START")
-
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     if len(text) > 3900:
-        text = text[:3900] + "\n\n...сообщение сокращено из-за лимита Telegram."
+        text = text[:3800] + "\n\n...сообщение сокращено из-за лимита Telegram."
 
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
 
-    try:
-        res = requests.post(url, json=payload, timeout=15)
-        res.raise_for_status()
-        print("Анализ успешно отправлен в Telegram!")
-        log_time("TELEGRAM_SEND_END")
-    except Exception as e:
-        print(f"Ошибка отправки в Telegram: {e}")
-        if "res" in locals():
-            print(f"Ответ Telegram: {res.text}")
-        raise e
+    last_error = None
+
+    for attempt in range(1, 3):
+        try:
+            response = requests.post(url, json=payload, timeout=20)
+            response.raise_for_status()
+            print(f"Telegram: сообщение отправлено, попытка {attempt}")
+            return
+        except Exception as error:
+            last_error = error
+            print(f"Telegram: ошибка попытки {attempt}: {error}")
+
+    raise RuntimeError(f"Telegram delivery failed after 2 attempts: {last_error}")
 
 
-log_time("SCRIPT_START")
+def main():
+    print(f"START {VERSION} at {now_kz().isoformat()}")
 
-portfolio_data = load_json_file("portfolio.json")
-watchlist_data = load_json_file("watchlist.json")
-cash_log = load_json_file("cash_log.json")
+    working_sources, failed_sources, items = collect_news()
+    report = build_report(working_sources, failed_sources, items)
 
-PORTFOLIO_TEXT = format_portfolio(portfolio_data)
-WATCH_LIST = format_watchlist(watchlist_data)
+    print(report)
+    send_to_telegram(report)
 
-raw_news_items = collect_raw_news()
-processed_news = process_news(raw_news_items)
-raw_news = format_news_for_prompt(processed_news)
+    print(f"FINISH {VERSION} at {now_kz().isoformat()}")
 
-event_input = make_event_input(processed_news)
-detected_events = detect_events(event_input)
-events_text = format_events_for_prompt(detected_events)
 
-decisions = make_decisions(detected_events, portfolio_data)
-decisions_text = format_decisions_for_prompt(decisions)
-
-daily_decision = build_daily_decision(detected_events, decisions, portfolio_data, cash_log, watchlist_data)
-daily_decision_text = format_daily_decision_for_prompt(daily_decision)
-compact_report = format_compact_report(daily_decision)
-
-prompt = f"""
-Ты мой личный инвестиционный помощник v2.0.
-
-Твоя задача — аккуратно оформить уже готовое решение алгоритма для Telegram.
-
-ЖЕСТКИЕ ПРАВИЛА:
-- Не меняй действие алгоритма.
-- Не меняй сумму покупки.
-- Не добавляй новые идеи от себя.
-- Не пиши приветствия.
-- Не используй фразу "покупки акций". Пиши "покупки активов".
-- Не упоминай внутренние баллы, action/watch/hold и технические детали.
-- Максимум 1500 символов.
-- Начинай строго с <b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>.
-- Сохрани структуру готового текста.
-
-ГОТОВЫЙ ТЕКСТ АЛГОРИТМА:
-
-{compact_report}
-
-ДОПОЛНИТЕЛЬНЫЕ ФАКТЫ ДЛЯ ПРОВЕРКИ, НЕ ДЛЯ ПЕРЕСКАЗА:
-
-{events_text}
-"""
-
-try:
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        analysis_result = response.text
-
-    except Exception as e:
-        print(f"Ошибка Gemini 2.5 Flash: {e}")
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        analysis_result = response.text
-
-except Exception as e:
-    print(f"Ошибка Gemini: {e}")
-
-    budget = daily_decision["budget"]
-    analysis_result = f"""
-<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>
-{daily_decision['action_ru']}
-
-<b>Сумма покупки сегодня:</b>
-{daily_decision['purchase_amount_usd']} $
-
-<b>Почему:</b>
-{daily_decision['why']}
-
-<b>💰 Инвестиционный бюджет</b>
-Минимальный ориентир: {budget['target_min_usd']} $. Внесено: {budget['deposited_usd']} $. До ориентира не хватает: {budget['missing_to_target_usd']} $.
-
-<b>Итог:</b>
-Ждать и не принимать решений без анализа.
-"""
-
-analysis_result = analysis_result.replace("покупки акций", "покупки активов")
-analysis_result = analysis_result.replace("покупать акции", "покупать активы")
-
-now_kz = datetime.now(timezone.utc).astimezone(KZ_TIMEZONE)
-analysis_result += f"\n\n🕒 Создано: {now_kz.strftime('%H:%M:%S')} KZ"
-
-if "<b>📌 РЕШЕНИЕ НА СЕГОДНЯ</b>" not in analysis_result:
-    analysis_result = compact_report
-    now_kz = datetime.now(timezone.utc).astimezone(KZ_TIMEZONE)
-    analysis_result += f"\n\n🕒 Создано: {now_kz.strftime('%H:%M:%S')} KZ"
-
-send_to_telegram(analysis_result)
-
-log_time("SCRIPT_FINISH")
+if __name__ == "__main__":
+    main()
