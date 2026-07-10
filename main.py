@@ -3,6 +3,7 @@ import re
 import json
 import time
 import hashlib
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -12,16 +13,19 @@ from urllib.parse import urlencode, urlparse
 import feedparser
 import requests
 
-VERSION = "TEMP-SAFETY-v2.4"
+VERSION = "TEMP-SAFETY-v2.7"
 KZ_TIMEZONE = timezone(timedelta(hours=5))
 LOOKBACK_HOURS = 48
 REQUEST_TIMEOUT = 12
 TELEGRAM_TIMEOUT = 20
-MAX_EVENTS_IN_TELEGRAM = 6
+MAX_EVENTS_IN_TELEGRAM = 4
 TELEGRAM_SAFE_LIMIT = 3600
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_TIMEOUT = 25
 
 BASE_FEEDS = [
     ("World Nuclear News", "https://world-nuclear-news.org/rss"),
@@ -41,6 +45,7 @@ BASE_FEEDS = [
 
 PRESS_RELEASE_SOURCES = {"PR Newswire", "GlobeNewswire"}
 GOOGLE_NEWS_ENDPOINT = "https://news.google.com/rss/search"
+REUTERS_SITEMAP_URL = "https://www.reuters.com/arc/outboundfeeds/news-sitemap/?outputType=xml"
 
 ENTITY_ALIASES = {
     "SKHY": ["SK Hynix", "SK hynix"],
@@ -94,7 +99,11 @@ OPINION_PATTERNS = [
     r"\bJim Cramer\b", r"\bwhat I think\b", r"\bmy take\b",
     r"\bstands on\b", r"\bshould you buy\b", r"\bwhy I am buying\b",
     r"\bdumping all my\b", r"\brating upgrade\b", r"\brating downgrade\b",
-    r"\banalyst says\b",
+    r"\banalyst says\b", r"\bquietly setting up\b",
+    r"\bfair value debate\b", r"\bincredible news\b",
+    r"\bjust got incredible\b", r"\bcould soar\b",
+    r"\bis this stock a buy\b", r"\btop stock\b",
+    r"\bstock prediction\b", r"\bprice target\b",
 ]
 
 OFFICIAL_DOMAINS = {
@@ -146,6 +155,12 @@ AGGREGATOR_NAMES = {
     "investing.com", "yahoo finance", "yahoo", "msn",
     "seeking alpha", "benzinga", "google news",
 }
+LOW_QUALITY_DOMAINS = {
+    "fool.com", "aol.com", "biggo.com",
+}
+LOW_QUALITY_NAMES = {
+    "the motley fool", "motley fool", "aol", "biggo",
+}
 PRESS_RELEASE_DOMAINS = {"prnewswire.com", "globenewswire.com", "businesswire.com"}
 MULTIPART_PUBLIC_SUFFIXES = {"co.kr", "co.uk", "com.sg", "com.au", "co.jp", "com.hk", "com.my", "co.nz", "com.br", "co.in"}
 STOPWORDS = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "from", "by", "after", "as", "at", "is", "are", "says", "said", "more", "than", "its", "this", "that", "will", "new", "us", "u", "s"}
@@ -195,23 +210,68 @@ def source_profile(domain, source_name=""):
     name = clean_text(source_name).lower()
 
     if any(rd == item or domain.endswith("." + item) for item in OFFICIAL_DOMAINS):
-        return {"group": "OFFICIAL", "trust": 100, "tier": 0, "kind": "official", "counts_as_independent": True}
+        return {
+            "group": "OFFICIAL",
+            "trust": 100,
+            "tier": 0,
+            "kind": "official",
+            "counts_as_independent": True,
+        }
 
     if name in AUTHORITATIVE_MEDIA_NAMES:
         group, trust, tier = AUTHORITATIVE_MEDIA_NAMES[name]
-        return {"group": group, "trust": trust, "tier": tier, "kind": "authoritative_media", "counts_as_independent": True}
+        return {
+            "group": group,
+            "trust": trust,
+            "tier": tier,
+            "kind": "authoritative_media",
+            "counts_as_independent": True,
+        }
 
     if rd in AUTHORITATIVE_MEDIA_DOMAINS:
         group, trust, tier = AUTHORITATIVE_MEDIA_DOMAINS[rd]
-        return {"group": group, "trust": trust, "tier": tier, "kind": "authoritative_media", "counts_as_independent": True}
+        return {
+            "group": group,
+            "trust": trust,
+            "tier": tier,
+            "kind": "authoritative_media",
+            "counts_as_independent": True,
+        }
+
+    if rd in LOW_QUALITY_DOMAINS or name in LOW_QUALITY_NAMES:
+        return {
+            "group": "LOW_QUALITY",
+            "trust": 20,
+            "tier": 9,
+            "kind": "low_quality",
+            "counts_as_independent": False,
+        }
 
     if rd in PRESS_RELEASE_DOMAINS or source_name in PRESS_RELEASE_SOURCES:
-        return {"group": "ISSUER_RELEASE", "trust": 70, "tier": 4, "kind": "issuer_statement", "counts_as_independent": False}
+        return {
+            "group": "ISSUER_RELEASE",
+            "trust": 70,
+            "tier": 4,
+            "kind": "issuer_statement",
+            "counts_as_independent": False,
+        }
 
     if rd in AGGREGATOR_DOMAINS or name in AGGREGATOR_NAMES:
-        return {"group": "AGGREGATOR", "trust": 50, "tier": 5, "kind": "aggregator", "counts_as_independent": False}
+        return {
+            "group": "AGGREGATOR",
+            "trust": 50,
+            "tier": 5,
+            "kind": "aggregator",
+            "counts_as_independent": False,
+        }
 
-    return {"group": f"MEDIA:{rd or name or 'unknown'}", "trust": 62, "tier": 4, "kind": "other_media", "counts_as_independent": False}
+    return {
+        "group": f"MEDIA:{rd or name or 'unknown'}",
+        "trust": 62,
+        "tier": 4,
+        "kind": "other_media",
+        "counts_as_independent": False,
+    }
 
 
 def parse_entry_datetime(entry):
@@ -289,12 +349,33 @@ def google_news_url(query):
 
 
 def build_radar_feeds(user_entities):
-    primary_names = [aliases[0] for aliases in user_entities.values() if aliases]
-    entity_query = "(" + " OR ".join(f'\"{name}\"' for name in primary_names) + ") when:2d"
+    primary_names = [
+        aliases[0]
+        for aliases in user_entities.values()
+        if aliases
+    ]
+    entity_query = (
+        "("
+        + " OR ".join(f'"{name}"' for name in primary_names)
+        + ") when:2d"
+    )
+
     return [
-        ("Radar: portfolio/watchlist", google_news_url(entity_query), "radar"),
-        ("Radar: Reuters", google_news_url(f"{entity_query} source:Reuters"), "radar"),
-        ("Radar: market topics", google_news_url(MARKET_RADAR_QUERY), "radar"),
+        (
+            "Radar: portfolio/watchlist",
+            google_news_url(entity_query),
+            "rss_radar",
+        ),
+        (
+            "Radar: market topics",
+            google_news_url(MARKET_RADAR_QUERY),
+            "rss_radar",
+        ),
+        (
+            "Radar: Reuters official",
+            REUTERS_SITEMAP_URL,
+            "reuters_sitemap",
+        ),
     ]
 
 
@@ -338,41 +419,163 @@ def fetch_feed(feed_name, feed_url, feed_kind, cutoff):
     return {"name": feed_name, "kind": feed_kind, "articles": articles, "raw_count": raw_count, "filtered_pr": filtered_pr}
 
 
+def parse_iso_datetime(value):
+    value = clean_text(value)
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        )
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def fetch_reuters_sitemap(feed_name, feed_url, feed_kind, cutoff):
+    response = requests.get(
+        feed_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 InvestmentAssistant/2.5"
+        },
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    root = ET.fromstring(response.content)
+    sitemap_ns = "http://www.sitemaps.org/schemas/sitemap/0.9"
+    news_ns = "http://www.google.com/schemas/sitemap-news/0.9"
+
+    articles = []
+    raw_count = 0
+
+    for node in root.findall(f".//{{{sitemap_ns}}}url"):
+        link = clean_text(
+            node.findtext(f"{{{sitemap_ns}}}loc", default="")
+        )
+        title = clean_text(
+            node.findtext(
+                f".//{{{news_ns}}}title",
+                default="",
+            )
+        )
+        published_at = parse_iso_datetime(
+            node.findtext(
+                f".//{{{news_ns}}}publication_date",
+                default="",
+            )
+        )
+
+        if (
+            not link
+            or not title
+            or published_at is None
+            or published_at < cutoff
+        ):
+            continue
+
+        raw_count += 1
+        articles.append(
+            {
+                "title": title,
+                "summary": "",
+                "url": link,
+                "domain": "reuters.com",
+                "published_at": published_at,
+                "source_name": "Reuters",
+                "discovery_channel": feed_name,
+                "feed_kind": feed_kind,
+            }
+        )
+
+    return {
+        "name": feed_name,
+        "kind": feed_kind,
+        "articles": articles,
+        "raw_count": raw_count,
+        "filtered_pr": 0,
+    }
+
+
 def collect_sources(user_entities):
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
-    specs = [(name, url, "base") for name, url in BASE_FEEDS] + build_radar_feeds(user_entities)
-    articles, base_working, radar_working, failures = [], [], [], []
-    stats = {"raw_base": 0, "raw_radar": 0, "filtered_pr": 0}
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        hours=LOOKBACK_HOURS
+    )
+    specs = [
+        (name, url, "base")
+        for name, url in BASE_FEEDS
+    ] + build_radar_feeds(user_entities)
+
+    articles = []
+    base_working = []
+    radar_working = []
+    failures = []
+    stats = {
+        "raw_base": 0,
+        "raw_radar": 0,
+        "filtered_pr": 0,
+        "filtered_low_quality": 0,
+        "filtered_opinion": 0,
+    }
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(fetch_feed, name, url, kind, cutoff): (name, kind) for name, url, kind in specs}
+        futures = {}
+
+        for name, url, kind in specs:
+            fetcher = (
+                fetch_reuters_sitemap
+                if kind == "reuters_sitemap"
+                else fetch_feed
+            )
+            future = executor.submit(
+                fetcher,
+                name,
+                url,
+                kind,
+                cutoff,
+            )
+            futures[future] = (name, kind)
+
         for future in as_completed(futures):
             name, kind = futures[future]
             try:
                 result = future.result()
                 articles.extend(result["articles"])
                 stats["filtered_pr"] += result["filtered_pr"]
-                status = f"{name}: {len(result['articles'])}"
+                status = (
+                    f"{name}: {len(result['articles'])}"
+                )
+
                 if kind == "base":
                     base_working.append(status)
                     stats["raw_base"] += result["raw_count"]
                 else:
                     radar_working.append(status)
                     stats["raw_radar"] += result["raw_count"]
+
             except Exception as error:
-                failures.append({"name": name, "kind": kind, "error": clean_text(str(error))[:140]})
+                failures.append(
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "error": clean_text(str(error))[:140],
+                    }
+                )
 
-    return articles, sorted(base_working), sorted(radar_working), sorted(failures, key=lambda x: x["name"]), stats
+    base_working.sort()
+    radar_working.sort()
+    failures.sort(key=lambda item: item["name"])
 
-
-def normalize_tokens(text):
-    words = re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9]+", clean_text(text).lower())
-    return {word for word in words if len(word) > 2 and word not in STOPWORDS}
-
-
-def title_similarity(left, right):
-    a, b = normalize_tokens(left), normalize_tokens(right)
-    return 0.0 if not a or not b else len(a & b) / len(a | b)
+    return (
+        articles,
+        base_working,
+        radar_working,
+        failures,
+        stats,
+    )
 
 
 def infer_subjects(article, user_entities):
@@ -416,6 +619,32 @@ def deduplicate_articles(articles):
     return result
 
 
+def quality_filter_articles(articles):
+    kept = []
+    rejected = {
+        "filtered_low_quality": 0,
+        "filtered_opinion": 0,
+    }
+
+    for article in articles:
+        profile = source_profile(
+            article.get("domain", ""),
+            article.get("source_name", ""),
+        )
+
+        if profile["kind"] == "low_quality":
+            rejected["filtered_low_quality"] += 1
+            continue
+
+        if is_opinion_title(article.get("title", "")):
+            rejected["filtered_opinion"] += 1
+            continue
+
+        kept.append(article)
+
+    return kept, rejected
+
+
 def cluster_articles(articles, user_entities):
     clusters = []
     valid = sorted((a for a in articles if a.get("published_at") is not None), key=lambda x: x["published_at"], reverse=True)
@@ -451,23 +680,69 @@ def cluster_articles(articles, user_entities):
 
 
 def confirmation_status(cluster):
-    groups, official, best_trust = set(), False, 0
+    independent_groups = set()
+    official_present = False
+    issuer_present = False
+    best_trust = 0
+
     for article in cluster["articles"]:
         profile = article["source_profile"]
         best_trust = max(best_trust, profile["trust"])
-        official = official or profile["kind"] == "official"
+
+        if profile["kind"] == "official":
+            official_present = True
+        if profile["kind"] == "issuer_statement":
+            issuer_present = True
         if profile["counts_as_independent"]:
-            groups.add(profile["group"])
-    if official:
-        return {"code": "OFFICIAL_CONFIRMED", "label": "официально подтверждено", "independent_count": len(groups), "best_trust": best_trust}
-    if len(groups) >= 2:
-        return {"code": "MULTI_SOURCE_CONFIRMED", "label": "подтверждено 2+ независимыми источниками", "independent_count": len(groups), "best_trust": best_trust}
-    if len(groups) == 1 and best_trust >= 82:
-        group = next(iter(groups))
-        return {"code": "RELIABLE_SINGLE_SOURCE", "label": f"один надежный источник: {group}", "independent_count": 1, "best_trust": best_trust}
+            independent_groups.add(profile["group"])
+
+    if official_present:
+        return {
+            "code": "OFFICIAL_CONFIRMED",
+            "label": "официально подтверждено",
+            "independent_count": len(independent_groups),
+            "best_trust": best_trust,
+        }
+
+    if len(independent_groups) >= 2:
+        return {
+            "code": "MULTI_SOURCE_CONFIRMED",
+            "label": "подтверждено 2+ независимыми источниками",
+            "independent_count": len(independent_groups),
+            "best_trust": best_trust,
+        }
+
+    if len(independent_groups) == 1 and best_trust >= 82:
+        group = next(iter(independent_groups))
+        return {
+            "code": "RELIABLE_SINGLE_SOURCE",
+            "label": f"один надежный источник: {group}",
+            "independent_count": 1,
+            "best_trust": best_trust,
+        }
+
+    if issuer_present:
+        return {
+            "code": "ISSUER_STATEMENT",
+            "label": "заявление компании, независимой проверки нет",
+            "independent_count": 0,
+            "best_trust": best_trust,
+        }
+
     if len(cluster["articles"]) >= 2:
-        return {"code": "REPEATED_NOT_INDEPENDENT", "label": "перепечатки без независимого подтверждения", "independent_count": 0, "best_trust": best_trust}
-    return {"code": "UNVERIFIED_SINGLE_SOURCE", "label": "один непроверенный источник", "independent_count": 0, "best_trust": best_trust}
+        return {
+            "code": "REPEATED_NOT_INDEPENDENT",
+            "label": "перепечатки без независимого подтверждения",
+            "independent_count": 0,
+            "best_trust": best_trust,
+        }
+
+    return {
+        "code": "UNVERIFIED_SINGLE_SOURCE",
+        "label": "один непроверенный источник",
+        "independent_count": 0,
+        "best_trust": best_trust,
+    }
 
 
 def choose_representative_article(cluster):
@@ -475,31 +750,102 @@ def choose_representative_article(cluster):
 
 
 def importance_score(cluster, confirmation):
-    score = 45 if cluster["direct_user_relevance"] else (18 if cluster["primary_subject"] != "GENERAL" else 0)
-    score += EVENT_WEIGHTS.get(cluster["event_type"], 5)
-    score += {"OFFICIAL_CONFIRMED": 20, "MULTI_SOURCE_CONFIRMED": 18, "RELIABLE_SINGLE_SOURCE": 15, "REPEATED_NOT_INDEPENDENT": 4}.get(confirmation["code"], 0)
-    newest = max(a["published_at"] for a in cluster["articles"])
-    age_hours = (datetime.now(timezone.utc) - newest.astimezone(timezone.utc)).total_seconds() / 3600
-    score += 10 if age_hours <= 12 else (5 if age_hours <= 24 else 0)
+    score = 0
+
+    if cluster["direct_user_relevance"]:
+        score += 45
+    elif cluster["primary_subject"] != "GENERAL":
+        score += 18
+
+    score += EVENT_WEIGHTS.get(
+        cluster["event_type"],
+        5,
+    )
+
+    if confirmation["code"] == "OFFICIAL_CONFIRMED":
+        score += 20
+    elif confirmation["code"] == "MULTI_SOURCE_CONFIRMED":
+        score += 18
+    elif confirmation["code"] == "RELIABLE_SINGLE_SOURCE":
+        score += 15
+    elif confirmation["code"] == "ISSUER_STATEMENT":
+        score += 10
+
+    newest = max(
+        article["published_at"]
+        for article in cluster["articles"]
+    )
+    age_hours = (
+        datetime.now(timezone.utc)
+        - newest.astimezone(timezone.utc)
+    ).total_seconds() / 3600
+
+    if age_hours <= 12:
+        score += 10
+    elif age_hours <= 24:
+        score += 5
+
     return min(score, 100)
 
 
 def score_and_filter_clusters(clusters):
     results = []
+    accepted_statuses = {
+        "OFFICIAL_CONFIRMED",
+        "MULTI_SOURCE_CONFIRMED",
+        "RELIABLE_SINGLE_SOURCE",
+        "ISSUER_STATEMENT",
+    }
+
     for cluster in clusters:
         confirmation = confirmation_status(cluster)
         score = importance_score(cluster, confirmation)
         representative = choose_representative_article(cluster)
-        include = (
-            cluster["direct_user_relevance"] and cluster["event_type"] in STRONG_CLUSTER_TYPES and score >= 60
-        ) or score >= 72 or (
-            confirmation["code"] in {"OFFICIAL_CONFIRMED", "MULTI_SOURCE_CONFIRMED", "RELIABLE_SINGLE_SOURCE"} and score >= 60
-        )
-        if representative["is_opinion"] and cluster["event_type"] == "other":
-            include = False
+
+        include = False
+
+        if (
+            cluster["direct_user_relevance"]
+            and cluster["event_type"] in STRONG_CLUSTER_TYPES
+            and confirmation["code"] in accepted_statuses
+            and score >= 60
+        ):
+            include = True
+        elif (
+            not cluster["direct_user_relevance"]
+            and cluster["primary_subject"] != "GENERAL"
+            and confirmation["code"] in {
+                "OFFICIAL_CONFIRMED",
+                "MULTI_SOURCE_CONFIRMED",
+                "RELIABLE_SINGLE_SOURCE",
+            }
+            and score >= 60
+        ):
+            include = True
+
         if include:
-            results.append({**cluster, "confirmation": confirmation, "score": score, "newest": max(a["published_at"] for a in cluster["articles"]), "representative": representative})
-    return sorted(results, key=lambda x: (x["direct_user_relevance"], x["score"], x["newest"]), reverse=True)
+            results.append(
+                {
+                    **cluster,
+                    "confirmation": confirmation,
+                    "score": score,
+                    "newest": max(
+                        article["published_at"]
+                        for article in cluster["articles"]
+                    ),
+                    "representative": representative,
+                }
+            )
+
+    return sorted(
+        results,
+        key=lambda item: (
+            item["direct_user_relevance"],
+            item["score"],
+            item["newest"],
+        ),
+        reverse=True,
+    )
 
 
 def source_groups(cluster):
@@ -517,53 +863,440 @@ def compact_subject(event):
     return primary if not others else f"{primary}; связано: {', '.join(others[:2])}"
 
 
-def build_report(base_working, radar_working, failures, stats, events, elapsed_seconds):
+EVENT_TYPE_RU = {
+    "earnings": "финансовая отчетность",
+    "guidance": "изменение прогноза компании",
+    "merger_acquisition": "слияние, покупка или продажа актива",
+    "capital_markets": "размещение, листинг или привлечение капитала",
+    "capital_return": "дивиденды или обратный выкуп",
+    "distress": "финансовые трудности или реструктуризация",
+    "regulatory": "регуляторное решение",
+    "legal_sanctions": "судебное или санкционное событие",
+    "management": "изменение руководства",
+    "operations": "операционное событие",
+    "contract": "контракт или заказ",
+    "market_move": "существенное движение рынка или бумаги",
+    "other": "корпоративное или рыночное событие",
+}
+
+ACTION_LABELS_RU = {
+    "NO_ACTION": "ДЕЙСТВИЙ НЕТ",
+    "HOLD": "ОСТАВИТЬ БЕЗ ИЗМЕНЕНИЙ",
+    "WATCH": "НАБЛЮДАТЬ",
+    "RESEARCH": "ПРОВЕРИТЬ ДОПОЛНИТЕЛЬНО",
+}
+
+ALLOWED_ACTION_CODES = set(ACTION_LABELS_RU)
+
+
+def collect_ticker_locations(portfolio_data, watchlist_data):
+    locations = {ticker: {"accounts": [], "watchlist": False} for ticker in ENTITY_ALIASES}
+
+    def collect_from_value(value, account_name):
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                ticker = str(key).upper().strip()
+                if ticker in locations and account_name not in locations[ticker]["accounts"]:
+                    locations[ticker]["accounts"].append(account_name)
+                collect_from_value(nested, account_name)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    ticker = str(item.get("ticker", "")).upper().strip()
+                    if ticker in locations and account_name not in locations[ticker]["accounts"]:
+                        locations[ticker]["accounts"].append(account_name)
+                    collect_from_value(item, account_name)
+
+    if isinstance(portfolio_data, dict):
+        for account_name, positions in portfolio_data.items():
+            collect_from_value(positions, str(account_name))
+
+    if isinstance(watchlist_data, dict):
+        for item in watchlist_data.get("watchlist", []):
+            if isinstance(item, dict):
+                ticker = str(item.get("ticker", "")).upper().strip()
+                if ticker in locations:
+                    locations[ticker]["watchlist"] = True
+
+    # Пока SKHY ведется как отдельная задача пользователя, сохраняем его в списке наблюдения.
+    locations["SKHY"]["watchlist"] = True
+    return locations
+
+
+def relation_text(event, ticker_locations):
+    direct_tickers = [
+        subject for subject in sorted(event.get("subjects", []))
+        if subject in ticker_locations
+    ]
+
+    parts = []
+    for ticker in direct_tickers:
+        item = ticker_locations[ticker]
+        if item["accounts"]:
+            parts.append(f"{ticker} находится в портфеле: {', '.join(item['accounts'])}")
+        elif item["watchlist"]:
+            parts.append(f"{ticker} находится в списке наблюдения")
+
+    if parts:
+        return "; ".join(parts)
+
+    primary = event.get("primary_subject", "GENERAL")
+    if primary == "SEMICONDUCTORS":
+        return "Косвенная связь с позициями MU, AMAT, AVGO и наблюдаемой SKHY"
+    if primary == "ENERGY":
+        return "Косвенная связь с XLE и энергетической частью портфеля"
+    if primary == "URANIUM":
+        return "Косвенная связь с CCJ, KZAPD и UROY"
+    if primary == "PRECIOUS_METALS":
+        return "Косвенная связь с SIVR и PSLV"
+    if primary == "CRYPTO":
+        return "Косвенная связь с IBIT"
+    if primary == "US_MARKET":
+        return "Влияние на широкие фондовые позиции SPY, SPYM, VT, QQQM и IXUS"
+    return "Прямая связь с текущими позициями не установлена"
+
+
+def trim_text(value, limit):
+    value = clean_text(value)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def fallback_analysis(event, ticker_locations, index):
+    subject = compact_subject(event)
+    event_type = EVENT_TYPE_RU.get(
+        event.get("event_type", "other"),
+        EVENT_TYPE_RU["other"],
+    )
+    relation = relation_text(event, ticker_locations)
+
+    return {
+        "index": index,
+        "title_ru": f"{subject}: {event_type}",
+        "what_happened_ru": (
+            "Обнаружено значимое событие, но автоматический разбор содержания недоступен. "
+            "Для точного вывода требуется проверить первичный материал."
+        ),
+        "relevance_ru": relation + ".",
+        "impact_label": "Неясное",
+        "impact_reason_ru": (
+            "Без полного текста, котировки и фундаментальных данных направление влияния надежно не определяется."
+        ),
+        "watch_ru": "Проверить первичный источник, параметры события и реакцию цены.",
+        "action_code": "RESEARCH",
+        "action_reason_ru": (
+            "Событие связано с портфелем или списком наблюдения, но данных недостаточно для изменения позиции."
+        ),
+    }
+
+
+def build_gemini_events(events, ticker_locations):
+    payload = []
+    for index, event in enumerate(events[:MAX_EVENTS_IN_TELEGRAM]):
+        titles = []
+        for article in event.get("articles", []):
+            title = clean_text(article.get("title", ""))
+            if title and title not in titles:
+                titles.append(title)
+            if len(titles) >= 5:
+                break
+
+        payload.append(
+            {
+                "index": index,
+                "subject": compact_subject(event),
+                "event_type": EVENT_TYPE_RU.get(event.get("event_type", "other"), EVENT_TYPE_RU["other"]),
+                "importance": event.get("score", 0),
+                "confirmation": event.get("confirmation", {}).get("label", "статус не определен"),
+                "sources": source_groups(event)[:5],
+                "portfolio_relation": relation_text(event, ticker_locations),
+                "source_titles": titles,
+            }
+        )
+    return payload
+
+
+def extract_gemini_text(response_json):
+    candidates = response_json.get("candidates", [])
+    if not candidates:
+        raise RuntimeError("Gemini returned no candidates")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    texts = [part.get("text", "") for part in parts if part.get("text")]
+    if not texts:
+        raise RuntimeError("Gemini returned no text")
+    return "".join(texts)
+
+
+def has_russian_text(value):
+    value = clean_text(value)
+    cyrillic = len(re.findall(r"[А-Яа-яЁё]", value))
+    latin = len(re.findall(r"[A-Za-z]", value))
+    if cyrillic < 3:
+        return False
+    return latin <= max(18, cyrillic)
+
+
+def contains_raw_source_title(value, event):
+    normalized_value = clean_text(value).lower()
+    for article in event.get("articles", []):
+        raw_title = clean_text(article.get("title", ""))
+        if len(raw_title) >= 24 and raw_title.lower() in normalized_value:
+            return True
+    return False
+
+
+def valid_russian_analysis(candidate, event):
+    required_text_fields = (
+        "title_ru",
+        "what_happened_ru",
+        "relevance_ru",
+        "impact_reason_ru",
+        "watch_ru",
+        "action_reason_ru",
+    )
+    if candidate.get("action_code") not in ALLOWED_ACTION_CODES:
+        return False
+    if candidate.get("impact_label") not in {
+        "Положительное",
+        "Отрицательное",
+        "Смешанное",
+        "Неясное",
+    }:
+        return False
+    for field in required_text_fields:
+        value = candidate.get(field, "")
+        if not value or not has_russian_text(value):
+            return False
+        if contains_raw_source_title(value, event):
+            return False
+    return True
+
+
+def analyze_events_in_russian(events, ticker_locations):
+    selected = events[:MAX_EVENTS_IN_TELEGRAM]
+    fallback = [
+        fallback_analysis(event, ticker_locations, index)
+        for index, event in enumerate(selected)
+    ]
+
+    if not selected:
+        return fallback, "не требовался"
+
+    if not GEMINI_API_KEY:
+        return fallback, "ключ Gemini отсутствует — использован русский резервный шаблон"
+
+    input_events = build_gemini_events(selected, ticker_locations)
+    prompt = (
+        "Ты редактор личного инвестиционного дайджеста. Проанализируй события ниже. "
+        "Ответь строго по-русски и только в заданной JSON-структуре. "
+        "Не копируй английские заголовки. Не выдумывай факты, цифры или причины, которых нет во входных данных. "
+        "Если заголовков недостаточно, прямо напиши: 'Недостаточно данных в заголовках'. "
+        "Для каждого события объясни: что произошло; какое отношение оно имеет к указанным позициям или списку наблюдения; "
+        "каково вероятное направление влияния — Положительное, Отрицательное, Смешанное или Неясное; почему; что отслеживать дальше. "
+        "Также выбери один служебный статус: NO_ACTION, HOLD, WATCH или RESEARCH. "
+        "NO_ACTION — событие не меняет инвестиционный тезис и не требует наблюдения; "
+        "HOLD — событие относится к уже имеющейся позиции, но оснований менять ее нет; "
+        "WATCH — есть понятное условие, за которым нужно наблюдать; "
+        "RESEARCH — событие важно, но требует проверки параметров или независимого подтверждения. "
+        "Не используй BUY или SELL. Направление влияния — не прогноз цены и не команда купить или продать. "
+        "Каждое текстовое поле — максимум 180 символов. Сохрани исходный index.\n\n"
+        + json.dumps(input_events, ensure_ascii=False)
+    )
+
+    schema = {
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "properties": {
+                "index": {"type": "INTEGER"},
+                "title_ru": {"type": "STRING"},
+                "what_happened_ru": {"type": "STRING"},
+                "relevance_ru": {"type": "STRING"},
+                "impact_label": {
+                    "type": "STRING",
+                    "enum": ["Положительное", "Отрицательное", "Смешанное", "Неясное"],
+                },
+                "impact_reason_ru": {"type": "STRING"},
+                "watch_ru": {"type": "STRING"},
+                "action_code": {
+                    "type": "STRING",
+                    "enum": ["NO_ACTION", "HOLD", "WATCH", "RESEARCH"],
+                },
+                "action_reason_ru": {"type": "STRING"},
+            },
+            "required": [
+                "index",
+                "title_ru",
+                "what_happened_ru",
+                "relevance_ru",
+                "impact_label",
+                "impact_reason_ru",
+                "watch_ru",
+                "action_code",
+                "action_reason_ru",
+            ],
+        },
+    }
+
+    request_payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 2200,
+            "responseMimeType": "application/json",
+            "responseSchema": schema,
+        },
+    }
+
+    try:
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+            headers={
+                "x-goog-api-key": GEMINI_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json=request_payload,
+            timeout=GEMINI_TIMEOUT,
+        )
+        response.raise_for_status()
+        raw = json.loads(extract_gemini_text(response.json()))
+        if not isinstance(raw, list):
+            raise RuntimeError("Gemini JSON is not a list")
+
+        by_index = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(selected):
+                by_index[index] = {
+                    "index": index,
+                    "title_ru": trim_text(item.get("title_ru", ""), 180),
+                    "what_happened_ru": trim_text(item.get("what_happened_ru", ""), 190),
+                    "relevance_ru": trim_text(item.get("relevance_ru", ""), 190),
+                    "impact_label": item.get("impact_label", "Неясное"),
+                    "impact_reason_ru": trim_text(item.get("impact_reason_ru", ""), 190),
+                    "watch_ru": trim_text(item.get("watch_ru", ""), 180),
+                    "action_code": item.get("action_code", "RESEARCH"),
+                    "action_reason_ru": trim_text(item.get("action_reason_ru", ""), 190),
+                }
+
+        result = []
+        for index, backup in enumerate(fallback):
+            candidate = by_index.get(index)
+            if not candidate or not valid_russian_analysis(candidate, selected[index]):
+                result.append(backup)
+            else:
+                result.append(candidate)
+
+        return result, f"{GEMINI_MODEL}: русский разбор выполнен"
+
+    except Exception as error:
+        print(f"Gemini analysis failed: {error}")
+        return fallback, f"Gemini недоступен — резервный русский шаблон ({clean_text(str(error))[:90]})"
+
+
+def build_report(
+    base_working,
+    radar_working,
+    failures,
+    stats,
+    events,
+    event_analyses,
+    gemini_status,
+    elapsed_seconds,
+):
     lines = [
         "⚠️ ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ ДАЙДЖЕСТ",
         f"Версия: {VERSION}",
         "",
-        f"📡 RSS {len(base_working)}/{len(BASE_FEEDS)}; радар {len(radar_working)}/3; ошибок {len(failures)}; рекламных PR отсеяно {stats['filtered_pr']}.",
+        f"📡 RSS {len(base_working)}/{len(BASE_FEEDS)}; радар {len(radar_working)}/3; ошибок {len(failures)}.",
+        (
+            f"🧹 Отсеяно: рекламных PR {stats['filtered_pr']}; "
+            f"низкокачественных источников {stats['filtered_low_quality']}; "
+            f"мнений/кликбейта {stats['filtered_opinion']}."
+        ),
+        f"🧠 Обработка текста: {gemini_status}.",
         f"⏱ Сбор и анализ: {elapsed_seconds:.1f} сек.",
         "",
-        "🚨 Важные события",
+        "🚨 События, которые имеют понятную связь с вашими инвестициями",
     ]
 
     if not events:
-        lines.append("События с достаточной важностью в доступных источниках не обнаружены. Полнота рынка пока не гарантируется.")
+        lines.append(
+            "События с достаточной важностью в доступных источниках не обнаружены. "
+            "Полнота рынка пока не гарантируется."
+        )
     else:
         shown = 0
-        for event in events:
-            if shown >= MAX_EVENTS_IN_TELEGRAM:
-                break
-            representative = event["representative"]
+        for index, event in enumerate(events[:MAX_EVENTS_IN_TELEGRAM]):
+            analysis = event_analyses[index]
             newest_kz = event["newest"].astimezone(KZ_TIMEZONE)
-            groups = source_groups(event)
             block = [
                 "",
-                f"• {compact_subject(event)} — {representative['title']}",
-                f"  Важность {event['score']}/100; {event['confirmation']['label']}.",
-                f"  Группы: {', '.join(groups[:4])}; публикаций: {len(event['articles'])}; {newest_kz.strftime('%d.%m %H:%M')} KZ.",
+                f"• {analysis['title_ru']}",
+                f"  Что произошло: {analysis['what_happened_ru']}",
+                f"  Для портфеля: {analysis['relevance_ru']}",
+                f"  Возможное влияние: {analysis['impact_label']} — {analysis['impact_reason_ru']}",
+                f"  Что отслеживать: {analysis['watch_ru']}",
+                (
+                    f"  Статус: {ACTION_LABELS_RU[analysis['action_code']]}. "
+                    f"{analysis['action_reason_ru']}"
+                ),
+                (
+                    f"  Проверка: {event['confirmation']['label']}; "
+                    f"источники: {', '.join(source_groups(event)[:4])}; "
+                    f"{newest_kz.strftime('%d.%m %H:%M')} KZ."
+                ),
             ]
             if len("\n".join(lines + block)) > TELEGRAM_SAFE_LIMIT:
                 break
             lines.extend(block)
             shown += 1
+
         if len(events) > shown:
-            lines.extend(["", f"Еще важных событий: {len(events) - shown}. Полный список записан в Actions."])
+            lines.extend(
+                [
+                    "",
+                    "Менее значимые события исключены из сообщения, чтобы не перегружать дайджест.",
+                ]
+            )
 
     if failures:
         lines.extend(["", "❌ Не сработали:"])
         for failure in failures[:3]:
             lines.append(f"• {failure['name']}: {failure['error'][:90]}")
 
-    lines.extend([
-        "",
-        "⚠️ Котировки и фундаментальные данные еще не подключены. Эта версия выявляет события, но не дает команд покупать или продавать.",
-        f"🕒 Создано: {now_kz().strftime('%H:%M:%S')} KZ",
-    ])
+    lines.extend(
+        [
+            "",
+            (
+                "⚠️ Это оценка возможного влияния событий, а не прогноз цены. "
+                "Котировки и фундаментальные данные еще не подключены, поэтому команд покупать или продавать нет."
+            ),
+            f"🕒 Создано: {now_kz().strftime('%H:%M:%S')} KZ",
+        ]
+    )
+
     text = "\n".join(lines)
     if len(text) > TELEGRAM_SAFE_LIMIT:
         raise RuntimeError(f"Telegram report exceeded safe limit: {len(text)}")
+
+    for event in events[:MAX_EVENTS_IN_TELEGRAM]:
+        for article in event.get("articles", []):
+            raw_title = clean_text(article.get("title", ""))
+            if len(raw_title) >= 24 and raw_title.lower() in text.lower():
+                raise RuntimeError("Raw source title leaked into Telegram report")
+
     return text
 
 
@@ -581,22 +1314,56 @@ def main():
     started = time.monotonic()
     print(f"START {VERSION} {now_kz().isoformat()}")
 
-    entities = build_user_entities(load_json_file("portfolio.json"), load_json_file("watchlist.json"))
+    portfolio_data = load_json_file("portfolio.json")
+    watchlist_data = load_json_file("watchlist.json")
+    entities = build_user_entities(portfolio_data, watchlist_data)
+    ticker_locations = collect_ticker_locations(portfolio_data, watchlist_data)
+
     articles, base_working, radar_working, failures, stats = collect_sources(entities)
-    events = score_and_filter_clusters(cluster_articles(deduplicate_articles(articles), entities))
+    articles = deduplicate_articles(articles)
+    articles, quality_stats = quality_filter_articles(articles)
+    stats.update(quality_stats)
+    clusters = cluster_articles(articles, entities)
+    events = score_and_filter_clusters(clusters)
+
+    event_analyses, gemini_status = analyze_events_in_russian(
+        events,
+        ticker_locations,
+    )
     elapsed = time.monotonic() - started
 
     print("BASE:", *base_working, sep="\n  ")
     print("RADAR:", *radar_working, sep="\n  ")
     print("FAILURES:", *[f"{x['name']}: {x['error']}" for x in failures], sep="\n  ")
+    print(f"GEMINI: {gemini_status}")
     print(f"EVENTS SELECTED: {len(events)}")
-    for event in events:
-        print(f"  {event['primary_subject']} | {event['event_type']} | {event['score']} | {','.join(source_groups(event))} | {event['representative']['title']}")
+    for index, event in enumerate(events):
+        analysis_title = (
+            event_analyses[index]["title_ru"]
+            if index < len(event_analyses)
+            else event["primary_subject"]
+        )
+        print(
+            f"  {event['primary_subject']} | {event['event_type']} | "
+            f"{event['score']} | {','.join(source_groups(event))} | {analysis_title}"
+        )
 
-    report = build_report(base_working, radar_working, failures, stats, events, elapsed)
+    report = build_report(
+        base_working,
+        radar_working,
+        failures,
+        stats,
+        events,
+        event_analyses,
+        gemini_status,
+        elapsed,
+    )
     print(report)
     send_to_telegram(report)
-    print(f"FINISH {VERSION} in {time.monotonic() - started:.1f}s at {now_kz().isoformat()}")
+    print(
+        f"FINISH {VERSION} in {time.monotonic() - started:.1f}s "
+        f"at {now_kz().isoformat()}"
+    )
 
 
 if __name__ == "__main__":
