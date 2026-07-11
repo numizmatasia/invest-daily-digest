@@ -16,23 +16,24 @@ from urllib.parse import urlencode, urlparse
 import feedparser
 import requests
 
-VERSION = "TEMP-SAFETY-v2.9"
-RELEASE_GATE_SCHEMA_VERSION = "1.0"
+VERSION = "TEMP-SAFETY-v2.10"
+RELEASE_GATE_SCHEMA_VERSION = "1.1"
 MONTHLY_BUDGET_USD = 400
 KZ_TIMEZONE = timezone(timedelta(hours=5))
 LOOKBACK_HOURS = 48
 REQUEST_TIMEOUT = 12
 TELEGRAM_TIMEOUT = 20
-MAX_CONFIRMED_EVENTS = 2
-MAX_RESEARCH_EVENTS = 1
+MAX_CONFIRMED_EVENTS = 4
+MAX_RESEARCH_EVENTS = 4
 MAX_EVENTS_IN_TELEGRAM = MAX_CONFIRMED_EVENTS + MAX_RESEARCH_EVENTS
-TELEGRAM_SAFE_LIMIT = 3600
+MAX_DETAILED_EVENTS = 2
+TELEGRAM_SAFE_LIMIT = 3850
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_TIMEOUT = 25
+GEMINI_TIMEOUT = 20
 
 BASE_FEEDS = [
     ("World Nuclear News", "https://world-nuclear-news.org/rss"),
@@ -92,6 +93,7 @@ EVENT_PATTERNS = {
     "management": [r"\bCEO\b", r"\bCFO\b", r"\bchief executive\b", r"\bchief financial\b", r"\bresigns?\b", r"\bsteps down\b"],
     "operations": [r"\bshutdown\b", r"\bproduction halt\b", r"\bstrike\b", r"\baccident\b", r"\bmine closure\b", r"\bplant closure\b"],
     "contract": [r"\bcontract award\b", r"\bawarded a contract\b", r"\bmajor contract\b"],
+    "macro": [r"\bfederal reserve\b", r"\brate cut\b", r"\brate hike\b", r"\binflation\b", r"\bCPI\b", r"\bPCE\b", r"\bjobs report\b", r"\bunemployment\b", r"\bGDP\b", r"\btreasury yield\b", r"\btariff"],
     "market_move": [r"\bsurges?\b", r"\bslides?\b", r"\brall(?:y|ies)\b", r"\bplunges?\b", r"\bjumps?\b", r"\bfalls?\b", r"\brebound", r"\bselloff\b", r"\bmarket rout\b"],
 }
 
@@ -99,7 +101,7 @@ EVENT_WEIGHTS = {
     "earnings": 30, "guidance": 30, "merger_acquisition": 35,
     "capital_markets": 35, "capital_return": 25, "distress": 40,
     "regulatory": 35, "legal_sanctions": 30, "management": 20,
-    "operations": 35, "contract": 20, "market_move": 18, "other": 5,
+    "operations": 35, "contract": 20, "macro": 35, "market_move": 18, "other": 5,
 }
 
 OPINION_PATTERNS = [
@@ -171,7 +173,22 @@ LOW_QUALITY_NAMES = {
 PRESS_RELEASE_DOMAINS = {"prnewswire.com", "globenewswire.com", "businesswire.com"}
 MULTIPART_PUBLIC_SUFFIXES = {"co.kr", "co.uk", "com.sg", "com.au", "co.jp", "com.hk", "com.my", "co.nz", "com.br", "co.in"}
 STOPWORDS = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "from", "by", "after", "as", "at", "is", "are", "says", "said", "more", "than", "its", "this", "that", "will", "new", "us", "u", "s"}
-STRONG_CLUSTER_TYPES = {"earnings", "guidance", "merger_acquisition", "capital_markets", "capital_return", "distress", "regulatory", "legal_sanctions", "management", "operations"}
+STRONG_CLUSTER_TYPES = {"earnings", "guidance", "merger_acquisition", "capital_markets", "capital_return", "distress", "regulatory", "legal_sanctions", "management", "operations", "macro"}
+
+TOPIC_TICKER_MAP = {
+    "SEMICONDUCTORS": {"MU", "AMAT", "AVGO", "SKHY"},
+    "ENERGY": {"XLE"},
+    "URANIUM": {"CCJ", "KZAPD", "UROY"},
+    "PRECIOUS_METALS": {"SIVR", "PSLV"},
+    "CRYPTO": {"IBIT"},
+    "US_MARKET": {"SPY", "SPYM", "VT", "QQQM", "IXUS"},
+}
+
+US_MACRO_TERMS = {
+    "federal reserve", "fed ", "inflation", "cpi", "pce", "payroll",
+    "jobs report", "unemployment", "gdp", "treasury yield", "rate cut",
+    "rate hike", "tariff", "recession", "s&p 500", "nasdaq", "dow jones",
+}
 
 
 def now_kz():
@@ -208,6 +225,46 @@ def title_similarity(left, right):
     return len(left_tokens & right_tokens) / len(
         left_tokens | right_tokens
     )
+
+
+
+def numeric_markers(text):
+    return set(re.findall(r"\b\d+(?:[.,]\d+)?\b", clean_text(text)))
+
+
+def same_physical_event(seed_title, candidate_title, event_type):
+    similarity = title_similarity(seed_title, candidate_title)
+    threshold = 0.18 if event_type in STRONG_CLUSTER_TYPES else 0.30
+    if similarity >= threshold:
+        return True
+
+    shared_numbers = numeric_markers(seed_title) & numeric_markers(candidate_title)
+    return bool(shared_numbers) and similarity >= 0.10
+
+
+def topic_event_is_material(cluster):
+    if cluster.get("direct_user_relevance"):
+        return True
+
+    primary = cluster.get("primary_subject", "GENERAL")
+    event_type = cluster.get("event_type", "other")
+    title = " ".join(
+        clean_text(article.get("title", "")).lower()
+        for article in cluster.get("articles", [])
+    )
+
+    if primary == "US_MARKET":
+        if event_type == "earnings":
+            return False
+        return any(term in title for term in US_MACRO_TERMS)
+
+    if primary in {"SEMICONDUCTORS", "ENERGY", "URANIUM", "PRECIOUS_METALS", "CRYPTO"}:
+        return event_type in {
+            "market_move", "regulatory", "operations", "capital_markets",
+            "legal_sanctions", "distress",
+        }
+
+    return False
 
 
 def load_json_file(filename):
@@ -693,39 +750,74 @@ def quality_filter_articles(articles):
     return kept, rejected
 
 
+
 def cluster_articles(articles, user_entities):
     clusters = []
-    valid = sorted((a for a in articles if a.get("published_at") is not None), key=lambda x: x["published_at"], reverse=True)
+    valid = sorted(
+        (article for article in articles if article.get("published_at") is not None),
+        key=lambda item: item["published_at"],
+        reverse=True,
+    )
+
     for article in valid:
         subjects, direct = infer_subjects(article, user_entities)
         primary = subjects[0]
-        event_type = classify_event_type(f"{article.get('title', '')} {article.get('summary', '')}")
+        event_type = classify_event_type(
+            f"{article.get('title', '')} {article.get('summary', '')}"
+        )
         day = article["published_at"].astimezone(KZ_TIMEZONE).date().isoformat()
-        article.update({
-            "subjects": subjects,
-            "primary_subject": primary,
-            "direct_user_relevance": direct,
-            "event_type": event_type,
-            "source_profile": source_profile(article.get("domain", ""), article.get("source_name", "")),
-            "is_opinion": is_opinion_title(article.get("title", "")),
-        })
+
+        article.update(
+            {
+                "subjects": subjects,
+                "primary_subject": primary,
+                "direct_user_relevance": direct,
+                "event_type": event_type,
+                "source_profile": source_profile(
+                    article.get("domain", ""),
+                    article.get("source_name", ""),
+                ),
+                "is_opinion": is_opinion_title(article.get("title", "")),
+            }
+        )
 
         matched = None
         for cluster in clusters:
-            if cluster["primary_subject"] != primary or cluster["event_type"] != event_type or cluster["day"] != day:
+            if (
+                cluster["primary_subject"] != primary
+                or cluster["event_type"] != event_type
+                or cluster["day"] != day
+            ):
                 continue
-            if event_type in STRONG_CLUSTER_TYPES or title_similarity(cluster["seed_title"], article["title"]) >= 0.30:
+
+            if same_physical_event(
+                cluster["seed_title"],
+                article["title"],
+                event_type,
+            ):
                 matched = cluster
                 break
 
         if matched is None:
-            clusters.append({"primary_subject": primary, "subjects": set(subjects), "direct_user_relevance": direct, "event_type": event_type, "day": day, "seed_title": article["title"], "articles": [article]})
+            clusters.append(
+                {
+                    "primary_subject": primary,
+                    "subjects": set(subjects),
+                    "direct_user_relevance": direct,
+                    "event_type": event_type,
+                    "day": day,
+                    "seed_title": article["title"],
+                    "articles": [article],
+                }
+            )
         else:
             matched["articles"].append(article)
             matched["subjects"].update(subjects)
-            matched["direct_user_relevance"] = matched["direct_user_relevance"] or direct
-    return clusters
+            matched["direct_user_relevance"] = (
+                matched["direct_user_relevance"] or direct
+            )
 
+    return clusters
 
 def confirmation_status(cluster):
     independent_groups = set()
@@ -836,9 +928,11 @@ def importance_score(cluster, confirmation):
     return min(score, 100)
 
 
+
 def classify_event_buckets(clusters):
     confirmed = []
     research = []
+
     accepted_statuses = {
         "OFFICIAL_CONFIRMED",
         "MULTI_SOURCE_CONFIRMED",
@@ -852,6 +946,9 @@ def classify_event_buckets(clusters):
     research_event_types = STRONG_CLUSTER_TYPES | {"contract", "market_move"}
 
     for cluster in clusters:
+        if not topic_event_is_material(cluster):
+            continue
+
         confirmation = confirmation_status(cluster)
         score = importance_score(cluster, confirmation)
         representative = choose_representative_article(cluster)
@@ -867,34 +964,17 @@ def classify_event_buckets(clusters):
             "representative": representative,
         }
 
-        is_confirmed = False
-        if (
-            cluster["direct_user_relevance"]
-            and cluster["event_type"] in STRONG_CLUSTER_TYPES
+        is_confirmed = (
+            cluster["event_type"] in STRONG_CLUSTER_TYPES | {"market_move"}
             and confirmation["code"] in accepted_statuses
             and score >= 60
-        ):
-            is_confirmed = True
-        elif (
-            not cluster["direct_user_relevance"]
-            and cluster["primary_subject"] != "GENERAL"
-            and confirmation["code"] in {
-                "OFFICIAL_CONFIRMED",
-                "MULTI_SOURCE_CONFIRMED",
-                "RELIABLE_SINGLE_SOURCE",
-            }
-            and score >= 60
-        ):
-            is_confirmed = True
+        )
 
         if is_confirmed:
             base["display_tier"] = "CONFIRMED"
             confirmed.append(base)
             continue
 
-        # Не скрываем фактические материалы, относящиеся к портфелю,
-        # только потому, что источник пока один или публикации зависимы.
-        # Они идут в отдельный блок проверки, а не смешиваются с подтвержденными.
         if (
             cluster["direct_user_relevance"]
             and cluster["event_type"] in research_event_types
@@ -912,7 +992,6 @@ def classify_event_buckets(clusters):
     confirmed.sort(key=sort_key, reverse=True)
     research.sort(key=sort_key, reverse=True)
     return confirmed, research
-
 
 def select_events_for_report(confirmed, research):
     selected = confirmed[:MAX_CONFIRMED_EVENTS]
@@ -952,6 +1031,7 @@ EVENT_TYPE_RU = {
     "management": "изменение руководства",
     "operations": "операционное событие",
     "contract": "контракт или заказ",
+    "macro": "макроэкономическое или денежно-кредитное событие",
     "market_move": "существенное движение рынка или бумаги",
     "other": "корпоративное или рыночное событие",
 }
@@ -1039,25 +1119,41 @@ def extract_watchlist_positions(watchlist_data):
     return sorted(tickers)
 
 
+
 def event_actions_by_ticker(events, event_analyses):
     result = {}
+
     for index, event in enumerate(events):
         if index >= len(event_analyses):
             continue
+
         analysis = event_analyses[index]
-        for subject in event.get("subjects", []):
-            if subject not in ENTITY_ALIASES:
-                continue
-            result.setdefault(subject, []).append(
+        affected_tickers = {
+            subject
+            for subject in event.get("subjects", [])
+            if subject in ENTITY_ALIASES
+        }
+        affected_tickers.update(
+            TOPIC_TICKER_MAP.get(event.get("primary_subject", ""), set())
+        )
+
+        for ticker in sorted(affected_tickers):
+            result.setdefault(ticker, []).append(
                 {
                     "action_code": analysis.get("action_code", "RESEARCH"),
-                    "title_ru": trim_text(analysis.get("title_ru", subject), 90),
-                    "impact_label": analysis.get("impact_label", "Неясное"),
+                    "title_ru": trim_text(
+                        analysis.get("title_ru", ticker),
+                        90,
+                    ),
+                    "impact_label": analysis.get(
+                        "impact_label",
+                        "Неясное",
+                    ),
                     "tier": event.get("display_tier", "CONFIRMED"),
                 }
             )
-    return result
 
+    return result
 
 def account_display_name(name):
     value = clean_text(name)
@@ -1405,146 +1501,213 @@ def valid_russian_analysis(candidate, event):
     return True
 
 
-def analyze_events_in_russian(events, ticker_locations):
-    selected = events[:MAX_EVENTS_IN_TELEGRAM]
-    fallback = [
-        fallback_analysis(event, ticker_locations, index)
-        for index, event in enumerate(selected)
-    ]
 
-    if not selected:
-        return fallback, "не требовался"
+def analyze_one_event_with_gemini(event, ticker_locations, index):
+    backup = fallback_analysis(event, ticker_locations, index)
 
     if not GEMINI_API_KEY:
-        return fallback, "ключ Gemini отсутствует — использован русский резервный шаблон"
+        return backup, False, "ключ отсутствует"
 
-    input_events = build_gemini_events(selected, ticker_locations)
+    input_event = build_gemini_events([event], ticker_locations)[0]
     prompt = (
-        "Ты редактор личного инвестиционного дайджеста. Проанализируй события ниже. "
-        "Ответь строго по-русски и только в заданной JSON-структуре. "
-        "Не копируй английские заголовки. Не выдумывай факты, цифры или причины, которых нет во входных данных. "
-        "Если заголовков недостаточно, прямо напиши: 'Недостаточно данных в заголовках'. "
-        "Для каждого события объясни: что произошло; какое отношение оно имеет к указанным позициям или списку наблюдения; "
-        "каково вероятное направление влияния — Положительное, Отрицательное, Смешанное или Неясное; почему; что отслеживать дальше. "
-        "Поле verification_tier=RESEARCH означает, что событие нельзя подавать как подтвержденный факт: "
-        "для него action_code должен быть RESEARCH, а текст должен прямо указывать, что требуется проверка. "
-        "Также выбери один служебный статус: NO_ACTION, HOLD, WATCH или RESEARCH. "
-        "NO_ACTION — событие не меняет инвестиционный тезис и не требует наблюдения; "
-        "HOLD — событие относится к уже имеющейся позиции, но оснований менять ее нет; "
-        "WATCH — есть понятное условие, за которым нужно наблюдать; "
-        "RESEARCH — событие важно, но требует проверки параметров или независимого подтверждения. "
-        "Не используй BUY или SELL. Направление влияния — не прогноз цены и не команда купить или продать. "
-        "Каждое текстовое поле — максимум 130 символов. Сохрани исходный index.\n\n"
-        + json.dumps(input_events, ensure_ascii=False)
+        "Ты редактор личного инвестиционного дайджеста. "
+        "Проанализируй одно событие. Ответь строго по-русски и только JSON-объектом. "
+        "Не копируй английский заголовок и не выдумывай факты. "
+        "Если данных мало, прямо укажи это. "
+        "Объясни: что произошло, связь с портфелем, вероятное влияние, "
+        "что отслеживать и служебный статус NO_ACTION/HOLD/WATCH/RESEARCH. "
+        "BUY и SELL запрещены. Текст каждого поля — до 150 символов. "
+        f"Событие: {json.dumps(input_event, ensure_ascii=False)}"
     )
 
     schema = {
-        "type": "ARRAY",
-        "items": {
-            "type": "OBJECT",
-            "properties": {
-                "index": {"type": "INTEGER"},
-                "title_ru": {"type": "STRING"},
-                "what_happened_ru": {"type": "STRING"},
-                "relevance_ru": {"type": "STRING"},
-                "impact_label": {
-                    "type": "STRING",
-                    "enum": ["Положительное", "Отрицательное", "Смешанное", "Неясное"],
-                },
-                "impact_reason_ru": {"type": "STRING"},
-                "watch_ru": {"type": "STRING"},
-                "action_code": {
-                    "type": "STRING",
-                    "enum": ["NO_ACTION", "HOLD", "WATCH", "RESEARCH"],
-                },
-                "action_reason_ru": {"type": "STRING"},
+        "type": "OBJECT",
+        "properties": {
+            "title_ru": {"type": "STRING"},
+            "what_happened_ru": {"type": "STRING"},
+            "relevance_ru": {"type": "STRING"},
+            "impact_label": {
+                "type": "STRING",
+                "enum": [
+                    "Положительное",
+                    "Отрицательное",
+                    "Смешанное",
+                    "Неясное",
+                ],
             },
-            "required": [
-                "index",
-                "title_ru",
-                "what_happened_ru",
-                "relevance_ru",
-                "impact_label",
-                "impact_reason_ru",
-                "watch_ru",
-                "action_code",
-                "action_reason_ru",
-            ],
+            "impact_reason_ru": {"type": "STRING"},
+            "watch_ru": {"type": "STRING"},
+            "action_code": {
+                "type": "STRING",
+                "enum": ["NO_ACTION", "HOLD", "WATCH", "RESEARCH"],
+            },
+            "action_reason_ru": {"type": "STRING"},
         },
-    }
-
-    request_payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": prompt}],
-            }
+        "required": [
+            "title_ru",
+            "what_happened_ru",
+            "relevance_ru",
+            "impact_label",
+            "impact_reason_ru",
+            "watch_ru",
+            "action_code",
+            "action_reason_ru",
         ],
-        "generationConfig": {
-            "temperature": 0.1,
-            "maxOutputTokens": 2200,
-            "responseMimeType": "application/json",
-            "responseSchema": schema,
-        },
     }
 
-    try:
-        response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-            headers={
-                "x-goog-api-key": GEMINI_API_KEY,
-                "Content-Type": "application/json",
-            },
-            json=request_payload,
-            timeout=GEMINI_TIMEOUT,
-        )
-        response.raise_for_status()
-        raw = json.loads(extract_gemini_text(response.json()))
-        if not isinstance(raw, list):
-            raise RuntimeError("Gemini JSON is not a list")
-
-        by_index = {}
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            try:
-                index = int(item.get("index"))
-            except (TypeError, ValueError):
-                continue
-            if 0 <= index < len(selected):
-                by_index[index] = {
-                    "index": index,
-                    "title_ru": trim_text(item.get("title_ru", ""), 100),
-                    "what_happened_ru": trim_text(item.get("what_happened_ru", ""), 140),
-                    "relevance_ru": trim_text(item.get("relevance_ru", ""), 130),
-                    "impact_label": item.get("impact_label", "Неясное"),
-                    "impact_reason_ru": trim_text(item.get("impact_reason_ru", ""), 130),
-                    "watch_ru": trim_text(item.get("watch_ru", ""), 110),
-                    "action_code": item.get("action_code", "RESEARCH"),
-                    "action_reason_ru": trim_text(item.get("action_reason_ru", ""), 120),
+    last_error = None
+    for attempt, token_limit in ((1, 1600), (2, 2200)):
+        request_payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
                 }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": token_limit,
+                "responseMimeType": "application/json",
+                "responseSchema": schema,
+            },
+        }
 
-        result = []
-        for index, backup in enumerate(fallback):
-            candidate = by_index.get(index)
-            if not candidate or not valid_russian_analysis(candidate, selected[index]):
-                chosen = backup
-            else:
-                chosen = candidate
+        try:
+            response = requests.post(
+                (
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{GEMINI_MODEL}:generateContent"
+                ),
+                headers={
+                    "x-goog-api-key": GEMINI_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=request_payload,
+                timeout=GEMINI_TIMEOUT,
+            )
+            response.raise_for_status()
+            raw_text = extract_gemini_text(response.json())
+            item = json.loads(raw_text)
 
-            if selected[index].get("display_tier") == "RESEARCH":
-                chosen["action_code"] = "RESEARCH"
-                if "провер" not in chosen.get("action_reason_ru", "").lower():
-                    chosen["action_reason_ru"] = (
-                        "Источник или независимость сообщения недостаточны; параметры события нужно проверить."
+            if not isinstance(item, dict):
+                raise RuntimeError("Gemini JSON is not an object")
+
+            candidate = {
+                "index": index,
+                "title_ru": trim_text(item.get("title_ru", ""), 110),
+                "what_happened_ru": trim_text(
+                    item.get("what_happened_ru", ""),
+                    155,
+                ),
+                "relevance_ru": trim_text(
+                    item.get("relevance_ru", ""),
+                    145,
+                ),
+                "impact_label": item.get("impact_label", "Неясное"),
+                "impact_reason_ru": trim_text(
+                    item.get("impact_reason_ru", ""),
+                    145,
+                ),
+                "watch_ru": trim_text(item.get("watch_ru", ""), 125),
+                "action_code": item.get("action_code", "RESEARCH"),
+                "action_reason_ru": trim_text(
+                    item.get("action_reason_ru", ""),
+                    135,
+                ),
+            }
+
+            if not valid_russian_analysis(candidate, event):
+                raise RuntimeError("Gemini response failed validation")
+
+            if event.get("display_tier") == "RESEARCH":
+                candidate["action_code"] = "RESEARCH"
+                if "провер" not in candidate["action_reason_ru"].lower():
+                    candidate["action_reason_ru"] = (
+                        "Параметры и независимость сообщения нужно проверить."
                     )
-            result.append(chosen)
 
-        return result, f"{GEMINI_MODEL}: русский разбор выполнен"
+            return candidate, True, f"попытка {attempt}"
 
-    except Exception as error:
-        print(f"Gemini analysis failed: {error}")
-        return fallback, f"Gemini недоступен — резервный русский шаблон ({clean_text(str(error))[:90]})"
+        except Exception as error:
+            last_error = error
+            print(
+                f"Gemini event {index} attempt {attempt} failed: {error}"
+            )
+
+    return backup, False, clean_text(str(last_error))[:90]
+
+
+def analyze_events_in_russian(events, ticker_locations):
+    selected = events[:MAX_EVENTS_IN_TELEGRAM]
+
+    if not selected:
+        return [], "не требовался"
+
+    if not GEMINI_API_KEY:
+        fallback = [
+            fallback_analysis(event, ticker_locations, index)
+            for index, event in enumerate(selected)
+        ]
+        return (
+            fallback,
+            "ключ Gemini отсутствует — русский резервный шаблон",
+        )
+
+    results = [None] * len(selected)
+    successes = 0
+    failures = 0
+
+    with ThreadPoolExecutor(max_workers=min(3, len(selected))) as executor:
+        futures = {
+            executor.submit(
+                analyze_one_event_with_gemini,
+                event,
+                ticker_locations,
+                index,
+            ): index
+            for index, event in enumerate(selected)
+        }
+
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                analysis, success, _detail = future.result()
+            except Exception as error:
+                print(f"Gemini worker {index} failed: {error}")
+                analysis = fallback_analysis(
+                    selected[index],
+                    ticker_locations,
+                    index,
+                )
+                success = False
+
+            results[index] = analysis
+            if success:
+                successes += 1
+            else:
+                failures += 1
+
+    status = (
+        f"{GEMINI_MODEL}: успешно {successes}/{len(selected)}"
+    )
+    if failures:
+        status += f"; русский резерв {failures}/{len(selected)}"
+
+    return results, status
+
+
+
+def assert_no_raw_english_titles(text, events):
+    normalized_text = clean_text(text).lower()
+    for event in events:
+        for article in event.get("articles", []):
+            raw_title = clean_text(article.get("title", ""))
+            if len(raw_title) < 12:
+                continue
+            if raw_title.lower() in normalized_text:
+                raise RuntimeError(
+                    "Raw source title leaked into Telegram report"
+                )
 
 
 def build_report(
@@ -1562,15 +1725,18 @@ def build_report(
 ):
     action_label, action_reason = overall_action(event_analyses)
 
-    fixed_before_events = [
+    header = [
         "⚠️ ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ ДАЙДЖЕСТ",
         f"Версия: {VERSION}",
         "",
         "📋 Что делать сегодня",
         f"{action_label}. {action_reason}",
+        "",
+        "🔄 Что изменилось",
     ]
-    fixed_after_events = []
-    fixed_after_events.extend(
+
+    footer = []
+    footer.extend(
         portfolio_lines(
             account_positions,
             watchlist_tickers,
@@ -1578,9 +1744,9 @@ def build_report(
             event_analyses,
         )
     )
-    fixed_after_events.extend(budget_lines())
-    fixed_after_events.extend(opportunity_lines())
-    fixed_after_events.extend(
+    footer.extend(budget_lines())
+    footer.extend(opportunity_lines())
+    footer.extend(
         [
             "",
             "🧭 Полнота данных",
@@ -1594,10 +1760,17 @@ def build_report(
                 f"мнений/кликбейта {stats['filtered_opinion']}."
             ),
             (
-                f"• После фильтра: публикаций {coverage_stats['articles_after_quality']}; "
-                f"событий {coverage_stats['clusters_total']}; "
-                f"подтвержденных {coverage_stats['confirmed_total']}; "
+                f"• После фильтра: публикаций "
+                f"{coverage_stats['articles_after_quality']}; "
+                f"тематических групп {coverage_stats['clusters_total']}; "
+                f"релевантных подтвержденных "
+                f"{coverage_stats['confirmed_total']}; "
                 f"требуют проверки {coverage_stats['research_total']}."
+            ),
+            (
+                f"• В отчет включено и перечислено: "
+                f"{len(events)}/{coverage_stats['relevant_total']} "
+                "релевантных событий."
             ),
             f"• Обработка текста: {gemini_status}.",
             f"• Сбор и анализ: {elapsed_seconds:.1f} сек.",
@@ -1605,13 +1778,13 @@ def build_report(
     )
 
     if failures:
-        fixed_after_events.extend(["", "❌ Не сработали:"])
+        footer.extend(["", "❌ Не сработали:"])
         for failure in failures[:3]:
-            fixed_after_events.append(
+            footer.append(
                 f"• {failure['name']}: {failure['error'][:90]}"
             )
 
-    fixed_after_events.extend(
+    footer.extend(
         [
             "",
             (
@@ -1623,35 +1796,36 @@ def build_report(
         ]
     )
 
-    event_lines = ["", "🔄 Что изменилось"]
-    confirmed_indices = [
-        index for index, event in enumerate(events)
-        if event.get("display_tier") == "CONFIRMED"
-    ]
-    research_indices = [
-        index for index, event in enumerate(events)
-        if event.get("display_tier") == "RESEARCH"
-    ]
+    if not events:
+        body = [
+            "Подтвержденных изменений и сообщений, "
+            "требующих проверки, не найдено."
+        ]
+    else:
+        body = []
 
-    if not confirmed_indices and not research_indices:
-        event_lines.append(
-            "Подтвержденных изменений и сообщений, требующих проверки, не найдено."
-        )
-
-    def event_block(index, research=False):
+    def detailed_block(index):
         event = events[index]
         analysis = event_analyses[index]
         newest_kz = event["newest"].astimezone(KZ_TIMEZONE)
-        prefix = "🟡 Требует проверки" if research else "•"
+        prefix = (
+            "🟡 Требует проверки"
+            if event.get("display_tier") == "RESEARCH"
+            else "•"
+        )
         return [
             "",
             f"{prefix} {analysis['title_ru']}",
             f"  Что произошло: {analysis['what_happened_ru']}",
             f"  Для портфеля: {analysis['relevance_ru']}",
-            f"  Влияние: {analysis['impact_label']} — {analysis['impact_reason_ru']}",
+            (
+                f"  Влияние: {analysis['impact_label']} — "
+                f"{analysis['impact_reason_ru']}"
+            ),
             f"  Контроль: {analysis['watch_ru']}",
             (
-                f"  Статус: {ACTION_LABELS_RU[analysis['action_code']]}. "
+                f"  Статус: "
+                f"{ACTION_LABELS_RU[analysis['action_code']]}. "
                 f"{analysis['action_reason_ru']}"
             ),
             (
@@ -1661,41 +1835,35 @@ def build_report(
             ),
         ]
 
-    # Mandatory sections are preserved. Events are added only while the whole
-    # message remains inside the Telegram safety limit.
-    for index in confirmed_indices:
-        candidate = event_lines + event_block(index, research=False)
-        whole = fixed_before_events + candidate + fixed_after_events
-        if len("\n".join(whole)) <= TELEGRAM_SAFE_LIMIT:
-            event_lines = candidate
-        else:
-            break
-
-    for index in research_indices:
-        candidate = event_lines + event_block(index, research=True)
-        whole = fixed_before_events + candidate + fixed_after_events
-        if len("\n".join(whole)) <= TELEGRAM_SAFE_LIMIT:
-            event_lines = candidate
-        else:
-            break
-
-    shown_events = sum(
-        1 for line in event_lines
-        if line.startswith("• ") or line.startswith("🟡 Требует проверки ")
-    )
-    hidden_events = len(events) - shown_events
-    if hidden_events > 0:
-        notice = (
-            f"Еще отобрано событий: {hidden_events}. Они не скрыты как несуществующие: "
-            "количество отражено в блоке полноты данных, но подробности не помещены в одно сообщение."
+    def compact_line(index):
+        event = events[index]
+        analysis = event_analyses[index]
+        label = ACTION_LABELS_RU[analysis["action_code"]]
+        verification = event["confirmation"]["label"]
+        return (
+            f"• {analysis['title_ru']} — {label}. "
+            f"{trim_text(analysis['relevance_ru'], 90)} "
+            f"Проверка: {trim_text(verification, 70)}."
         )
-        candidate = event_lines + ["", notice]
-        whole = fixed_before_events + candidate + fixed_after_events
-        if len("\n".join(whole)) <= TELEGRAM_SAFE_LIMIT:
-            event_lines = candidate
 
-    lines = fixed_before_events + event_lines + fixed_after_events
-    text = "\n".join(lines)
+    if events:
+        detail_count = min(MAX_DETAILED_EVENTS, len(events))
+        for index in range(detail_count):
+            body.extend(detailed_block(index))
+
+        if len(events) > detail_count:
+            body.extend(["", "Кратко по остальным отобранным событиям"])
+            for index in range(detail_count, len(events)):
+                body.append(compact_line(index))
+
+    text = "\n".join(header + body + footer)
+
+    # Controlled compaction: no event disappears silently.
+    if len(text) > TELEGRAM_SAFE_LIMIT and events:
+        body = ["Все отобранные события — кратко"]
+        for index in range(len(events)):
+            body.append(compact_line(index))
+        text = "\n".join(header + body + footer)
 
     if len(text) > TELEGRAM_SAFE_LIMIT:
         raise RuntimeError(
@@ -1713,20 +1881,20 @@ def build_report(
         "🔎 Новые возможности",
         "🧭 Полнота данных",
     ]
-    missing = [section for section in required_sections if section not in text]
+    missing = [
+        section for section in required_sections
+        if section not in text
+    ]
     if missing:
         raise RuntimeError(
-            "Release contract broken; missing sections: " + ", ".join(missing)
+            "Missing mandatory report sections: "
+            + ", ".join(missing)
         )
 
-    for event in events:
-        for article in event.get("articles", []):
-            raw_title = clean_text(article.get("title", ""))
-            if raw_title and len(raw_title) >= 20 and raw_title in text:
-                raise RuntimeError(
-                    "Raw source title leaked into Telegram report"
-                )
+    if "Еще отобрано событий" in text:
+        raise RuntimeError("Hidden-event wording is forbidden")
 
+    assert_no_raw_english_titles(text, events)
     return text
 
 def send_to_telegram(text):
@@ -1799,6 +1967,7 @@ def main():
         "clusters_total": len(clusters),
         "confirmed_total": len(confirmed_events),
         "research_total": len(research_events),
+        "relevant_total": len(confirmed_events) + len(research_events),
     }
 
     event_analyses, gemini_status = analyze_events_in_russian(
