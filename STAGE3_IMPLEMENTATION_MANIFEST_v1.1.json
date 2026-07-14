@@ -1,0 +1,251 @@
+{
+  "package": "INVEST_ASSISTANT_STAGE3_FOUNDATION_WEB_v1.1",
+  "status": "TESTED_BEFORE_COMMIT",
+  "protected_files_unchanged": [
+    "main.py",
+    ".github/workflows/daily.yml"
+  ],
+  "installer_workflow": ".github/workflows/INSTALL_STAGE3_FOUNDATION.yml",
+  "files": [
+    {
+      "path": "STAGE3_FILE_TREE.txt",
+      "bytes": 3729,
+      "sha256": "fe785e1b78da342bcb53e00dac0a5408de1ce87e12ff75d9718f9c6e84f2c4f6"
+    },
+    {
+      "path": "STAGE3_FOUNDATION_README.md",
+      "bytes": 1141,
+      "sha256": "097130f6ef59e67d5ee1fe3350c12b48b4d1e6443363f49e60a5fc5c3b74d56a"
+    },
+    {
+      "path": "STAGE3_IMPLEMENTATION_AUDIT_v1.1.md",
+      "bytes": 1173,
+      "sha256": "083d0b4ca88d6d551eb7bc3e71debf832268b8acc467204e58fdd60d5cee49ea"
+    },
+    {
+      "path": "STAGE3_ORIGINAL_FILES_CHECK.json",
+      "bytes": 1152,
+      "sha256": "bff0bacf51f38c0d2a312d68ad99b4efb9bded3ac553fa2660d4c0a928a7c4fe"
+    },
+    {
+      "path": "STAGE3_WEB_INSTALL_README.md",
+      "bytes": 278,
+      "sha256": "ad4e7cea9739fc966ac8743c5db17a367b181337803f1645408412d853e32bed"
+    },
+    {
+      "path": "config/stage3/portfolio.json",
+      "bytes": 24228,
+      "sha256": "19745c6b33fe33d14dd3bb2bad5d776583a1c2a4b5243ac3f9030d9fdb6ce339"
+    },
+    {
+      "path": "config/stage3/source_catalog.json",
+      "bytes": 36313,
+      "sha256": "cb5d6a37689c066215cf0b64ea7a93d7343d3ac0f5e894f80f179e27ec2718cb"
+    },
+    {
+      "path": "config/stage3/state_machine.json",
+      "bytes": 4161,
+      "sha256": "713253ef0a7f66d60b3d0638088b42fd47c9e209b50cdcaa8fa8580b7eb6d61d"
+    },
+    {
+      "path": "config/stage3/user_limits.json",
+      "bytes": 1522,
+      "sha256": "46a1b090cd7cef126f9e38da5a026346d0e461cbbfc972bbae449638fafb9248"
+    },
+    {
+      "path": "config/stage3/watchlist.json",
+      "bytes": 182,
+      "sha256": "b199e4c66a4e28ee2e38a77335ef8a78fcab3a7fc024231acc67c4e9c6c2b283"
+    },
+    {
+      "path": "docs/INVEST_ASSISTANT_STAGE3_IMPLEMENTATION_PLAN_v1.0.md",
+      "bytes": 2498,
+      "sha256": "7e127b8258dfa34e7ffa073f50a4af3f4eed52796aa62e797321214f33561f01"
+    },
+    {
+      "path": "docs/INVEST_ASSISTANT_STAGE3_TECH_SPEC_v1.0.md",
+      "bytes": 8190,
+      "sha256": "2940e17bb3ea8a23940d866e094d5fc11bddb4852f16fda40ca69cb0ca23e16f"
+    },
+    {
+      "path": "docs/INVEST_ASSISTANT_STAGE3_TEST_PLAN_v1.0.md",
+      "bytes": 3797,
+      "sha256": "4ef41844590c8be32fd53929d230eeae519ab5c6c496b038c83966e50b62238e"
+    },
+    {
+      "path": "infra/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "infra/calendar_window.py",
+      "bytes": 1227,
+      "sha256": "bce96887cb5053cb2fc3a2dcd5a217c03b1450ec5f647e184e732318b8c52604"
+    },
+    {
+      "path": "infra/checkpoint_store.py",
+      "bytes": 966,
+      "sha256": "1b3592c912a7d1de94202a34a640d8ce47804163017af4bc5346ca4f97d889ad"
+    },
+    {
+      "path": "infra/clock_guard.py",
+      "bytes": 946,
+      "sha256": "f8673386f8498a4501261bab3f906e3740403949f8af0756aaeba30d2c855a42"
+    },
+    {
+      "path": "infra/config_snapshot.py",
+      "bytes": 776,
+      "sha256": "3f2786ecb437624f6f7e868a77bed1220a77957a2de486cd52506b90c3fdc077"
+    },
+    {
+      "path": "infra/delivery_store.py",
+      "bytes": 2600,
+      "sha256": "a531ce5ce9aae5d009b27bca1fa61851b587f2f40a324f5e2f8d645a493efc27"
+    },
+    {
+      "path": "infra/event_store.py",
+      "bytes": 1634,
+      "sha256": "8ac93c53da3e759c42be2ac3e85424ee6f321d9b67bd2b50b33723804e28df23"
+    },
+    {
+      "path": "infra/lease_service.py",
+      "bytes": 1074,
+      "sha256": "1b272f13ab92c1c000de09cb0deeffa029cd32e1ccd817f4c5959fbe84a232d7"
+    },
+    {
+      "path": "infra/raw_journal.py",
+      "bytes": 2038,
+      "sha256": "d4f31d64c23881f1520f109c791afddf046cf7989bb9ac2c651e2bb8ef9d8edb"
+    },
+    {
+      "path": "infra/snapshot_service.py",
+      "bytes": 1403,
+      "sha256": "ec87277e602c52bded279c9bcf619666ab5c5ed38b1a9fb2c273b5814f9f4a66"
+    },
+    {
+      "path": "infra/technical_alert_service.py",
+      "bytes": 1753,
+      "sha256": "68335ee543006a44e802482feb2d4942c0277e394273e3b8359a5b7e63650236"
+    },
+    {
+      "path": "infra/types.py",
+      "bytes": 2403,
+      "sha256": "75a2a44f5e170dbbf851497d7ba5bd0cc1df6bef7a91ab660bfce2d426edea66"
+    },
+    {
+      "path": "infra/watchdog_service.py",
+      "bytes": 2827,
+      "sha256": "4979129aa5ae4ebfcfe88736516a57300f04bd546552cac2cd06c76c0176fb6e"
+    },
+    {
+      "path": "pytest.ini",
+      "bytes": 48,
+      "sha256": "0f5ecfb3b4078bcd01a284bdf05e449fd06fce08ba47a8800fef2f80faec60c9"
+    },
+    {
+      "path": "requirements-stage3.txt",
+      "bytes": 37,
+      "sha256": "cd1f94929005406bafddb9b7a657c5cce24c3a4e8dddc95cd7a14c6df5dcc32c"
+    },
+    {
+      "path": "storage/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "storage/database.py",
+      "bytes": 2423,
+      "sha256": "a7accefd67d47a65863802346cd270a5c46e438b8b1976d41589ec0aebd2e7ef"
+    },
+    {
+      "path": "storage/migrate.py",
+      "bytes": 1613,
+      "sha256": "534026975b50d1666086766cdc2b692b51390221f0619cac31b0795470c01d0a"
+    },
+    {
+      "path": "storage/migrations/0001_stage3_foundation.sql",
+      "bytes": 17241,
+      "sha256": "ffc2c2a5e410c8905eceeacf793930487d82f50799334548b4197b0b887be557"
+    },
+    {
+      "path": "storage/postgres_repository.py",
+      "bytes": 4049,
+      "sha256": "d8fc02dc74bd63220419b98a518eee9c6b3f85e587beaf23bc016fc7b4cbc8fd"
+    },
+    {
+      "path": "storage/repository.py",
+      "bytes": 15484,
+      "sha256": "4e0550c3b23057162c60ea4f75c47fbd2a4ce0e95c6548bb76b3b7db6f3d5cc9"
+    },
+    {
+      "path": "tests/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/stage3/__init__.py",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/stage3/conftest.py",
+      "bytes": 321,
+      "sha256": "6becae618be1787c60a7adfd196afbff15e3b6e5bbf7706a643c9b389c4e9b76"
+    },
+    {
+      "path": "tests/stage3/test_alert_clock_security.py",
+      "bytes": 1944,
+      "sha256": "3f341948f5618a5dcae49b6f9fdb530249e0882cbfa4ebad55fb72ab30e5be48"
+    },
+    {
+      "path": "tests/stage3/test_calendar_snapshot.py",
+      "bytes": 3171,
+      "sha256": "4f8f55486d25d849bff838a1ca3f0d38f70c07d1c32c91786a748873a7fbb559"
+    },
+    {
+      "path": "tests/stage3/test_checkpoint.py",
+      "bytes": 1718,
+      "sha256": "39391a66d5d2135d04b4e40d7e3c4599340081d5122d774bf990f34918270a62"
+    },
+    {
+      "path": "tests/stage3/test_config_snapshot.py",
+      "bytes": 1003,
+      "sha256": "3f4011174bf15d4c7f34add56f9eb6a18878ad85c2120c4a1791e1e666791824"
+    },
+    {
+      "path": "tests/stage3/test_delivery.py",
+      "bytes": 2971,
+      "sha256": "dc080d2edd1476466d3370381fde4fec77cc123e3161052d2f8cd159308753e2"
+    },
+    {
+      "path": "tests/stage3/test_event_versions.py",
+      "bytes": 2447,
+      "sha256": "bd972a184494fcb76949b092e0029279aadacbffad76819477fb2e7febcd4876"
+    },
+    {
+      "path": "tests/stage3/test_lease_fencing.py",
+      "bytes": 3242,
+      "sha256": "cc70389ef75ce4915ade58b7401cbeefaa431333afb6646ac378a4f282da8a0b"
+    },
+    {
+      "path": "tests/stage3/test_postgres_integration.py",
+      "bytes": 998,
+      "sha256": "3310ba44680a806f798ab9c6b4cd44529a1c21c91d30261f0ea8739af222baab"
+    },
+    {
+      "path": "tests/stage3/test_raw_journal.py",
+      "bytes": 1917,
+      "sha256": "24d8e7e4f09e041b0c6fad5f445ad56e56d2221ba08b56f3592e20f2174ad8ab"
+    },
+    {
+      "path": "tests/stage3/test_sql_contract.py",
+      "bytes": 734,
+      "sha256": "d09831647b97e2e4d1146cd5ac3356f15f12b4edf11fd6b6523fcce8d638b9ec"
+    },
+    {
+      "path": "tests/stage3/test_watchdog.py",
+      "bytes": 2359,
+      "sha256": "dbd90dfaa0f879c66b5268364e5578faa5f968af41e71fb96959d33e93a78393"
+    }
+  ]
+}

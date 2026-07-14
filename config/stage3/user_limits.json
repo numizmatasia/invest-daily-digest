@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.1",
+  "config_version": "1.1-draft",
+  "as_of": "2026-07-12T00:00:00Z",
+  "approved_by_user": false,
+  "approved_at": null,
+  "max_aggressive_portfolio_pct": 20,
+  "allowed_strategies": [
+    "LONG_COMMON_STOCK",
+    "LONG_ETF"
+  ],
+  "forbidden_strategies": [
+    "SHORT",
+    "OPTIONS",
+    "LEVERAGE",
+    "AUTOMATIC_EXECUTION",
+    "UNAPPROVED_REBOUND_STRATEGY"
+  ],
+  "quiet_hours": {
+    "timezone": "Asia/Almaty",
+    "start": "00:00",
+    "end": "06:47",
+    "applies_to": "HUNT_ALERTS_ONLY"
+  },
+  "risk_limits": {
+    "minimum_cash_reserve_usd": null,
+    "max_loss_per_trade_usd": null,
+    "max_single_position_pct": null,
+    "min_reward_risk_ratio": null
+  },
+  "anomaly_thresholds": {
+    "price_gap_pct": null,
+    "volume_multiple": null,
+    "critical_position_move_pct": null
+  },
+  "portfolio_freshness": {
+    "max_age_hours": null
+  },
+  "telegram_limits": {
+    "max_text_characters": 3800,
+    "attachment_enabled": false
+  },
+  "blocking_unknowns": [
+    "risk_limits.minimum_cash_reserve_usd",
+    "risk_limits.max_loss_per_trade_usd",
+    "risk_limits.max_single_position_pct",
+    "risk_limits.min_reward_risk_ratio",
+    "anomaly_thresholds.price_gap_pct",
+    "anomaly_thresholds.volume_multiple",
+    "anomaly_thresholds.critical_position_move_pct",
+    "portfolio_freshness.max_age_hours"
+  ],
+  "minimum_monthly_investment_plan_usd": 400,
+  "minimum_monthly_investment_plan_note": "400 USD is the minimum monthly plan, not a fixed obligation and not a maximum."
+}

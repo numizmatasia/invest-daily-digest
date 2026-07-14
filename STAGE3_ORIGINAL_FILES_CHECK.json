@@ -1,0 +1,27 @@
+{
+  "main.py": {
+    "source_sha256": "1c18ece1fa37b4d69067c3334da0708d64f2cc12d097cc7ec49dfad55287d816",
+    "bundle_sha256": "1c18ece1fa37b4d69067c3334da0708d64f2cc12d097cc7ec49dfad55287d816",
+    "unchanged": true
+  },
+  ".github/workflows/daily.yml": {
+    "source_sha256": "ab101b70ccda49625f85fd63d706022049851a5e8da2d31d84193005fcc5b3ae",
+    "bundle_sha256": "ab101b70ccda49625f85fd63d706022049851a5e8da2d31d84193005fcc5b3ae",
+    "unchanged": true
+  },
+  "news_processor.py": {
+    "source_sha256": "7c5e5703a9f54afe067e39ea00c9e13564f73a58c2d4d9bf582c521605fc74ae",
+    "bundle_sha256": "7c5e5703a9f54afe067e39ea00c9e13564f73a58c2d4d9bf582c521605fc74ae",
+    "unchanged": true
+  },
+  "event_engine.py": {
+    "source_sha256": "2a53c8bbe7ba79c759d6c8a0c36f32950a7adaedf0ada4552a2c93d392c4e716",
+    "bundle_sha256": "2a53c8bbe7ba79c759d6c8a0c36f32950a7adaedf0ada4552a2c93d392c4e716",
+    "unchanged": true
+  },
+  "decision_engine.py": {
+    "source_sha256": "497e83f004e48db722a609f1bc6a04d07a84ea08cbe4ed35999cd50e3e46bf35",
+    "bundle_sha256": "497e83f004e48db722a609f1bc6a04d07a84ea08cbe4ed35999cd50e3e46bf35",
+    "unchanged": true
+  }
+}

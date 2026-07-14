@@ -1,0 +1,169 @@
+{
+  "schema_version": "1.0",
+  "stage": 3,
+  "business_pipeline_unchanged": [
+    "news_processor",
+    "event_engine",
+    "decision_engine",
+    "Gemini_explanation_only",
+    "renderer",
+    "Telegram"
+  ],
+  "run_states": {
+    "CREATED": [
+      "PREFLIGHT",
+      "BLOCKED",
+      "FAILED"
+    ],
+    "PREFLIGHT": [
+      "COLLECTING",
+      "BLOCKED",
+      "FAILED"
+    ],
+    "COLLECTING": [
+      "SNAPSHOT_BUILDING",
+      "ANALYZING",
+      "DEGRADED",
+      "FAILED",
+      "ABORTED_LOST_FENCE"
+    ],
+    "SNAPSHOT_BUILDING": [
+      "SNAPSHOT_FROZEN",
+      "DEGRADED",
+      "FAILED",
+      "ABORTED_LOST_FENCE"
+    ],
+    "SNAPSHOT_FROZEN": [
+      "ANALYZING",
+      "BLOCKED",
+      "FAILED",
+      "ABORTED_LOST_FENCE"
+    ],
+    "ANALYZING": [
+      "RENDERING",
+      "DEGRADED",
+      "FAILED",
+      "ABORTED_LOST_FENCE"
+    ],
+    "RENDERING": [
+      "PREPARED",
+      "DEGRADED",
+      "FAILED",
+      "ABORTED_LOST_FENCE"
+    ],
+    "PREPARED": [
+      "SENDING",
+      "BLOCKED",
+      "FAILED",
+      "ABORTED_LOST_FENCE"
+    ],
+    "SENDING": [
+      "SENT",
+      "FAILED",
+      "BLOCKED",
+      "ABORTED_LOST_FENCE"
+    ],
+    "SENT": [],
+    "DEGRADED": [
+      "ANALYZING",
+      "RENDERING",
+      "PREPARED",
+      "SENDING",
+      "SENT",
+      "FAILED",
+      "BLOCKED"
+    ],
+    "FAILED": [],
+    "BLOCKED": [],
+    "ABORTED_LOST_FENCE": []
+  },
+  "snapshot_states": {
+    "PLANNED": [
+      "BUILDING",
+      "INVALIDATED"
+    ],
+    "BUILDING": [
+      "FROZEN",
+      "INVALIDATED"
+    ],
+    "FROZEN": [
+      "ARCHIVED",
+      "INVALIDATED"
+    ],
+    "INVALIDATED": [
+      "ARCHIVED"
+    ],
+    "ARCHIVED": []
+  },
+  "delivery_states": {
+    "PREPARED": [
+      "RESERVED",
+      "DEFINITIVE_FAILED"
+    ],
+    "RESERVED": [
+      "SENDING",
+      "DEFINITIVE_FAILED"
+    ],
+    "SENDING": [
+      "SENT",
+      "DEFINITIVE_FAILED",
+      "UNKNOWN_DELIVERY",
+      "PARTIAL_SENT"
+    ],
+    "SENT": [],
+    "DEFINITIVE_FAILED": [
+      "RESERVED"
+    ],
+    "UNKNOWN_DELIVERY": [],
+    "PARTIAL_SENT": []
+  },
+  "terminal_delivery_states": [
+    "SENT",
+    "UNKNOWN_DELIVERY",
+    "PARTIAL_SENT"
+  ],
+  "invariants": [
+    "The logical pipeline is unchanged by Stage 3.",
+    "Raw items and event versions are append-only for the runtime role.",
+    "event_version is monotonic for one event_id.",
+    "One calendar window has one snapshot_id.",
+    "A frozen snapshot cannot receive new items.",
+    "The daily window is previous 06:25 to current 06:25 Asia/Almaty.",
+    "event_cutoff_at is 06:25 Asia/Almaty.",
+    "snapshot_freeze_at is 06:27 Asia/Almaty.",
+    "Late arrivals after freeze do not mutate the frozen snapshot.",
+    "Daily, portfolio intraday and hunting use different lock scopes.",
+    "Every state-changing write requires the current fencing_token.",
+    "A stale owner cannot write after a new fencing_token is issued.",
+    "Only one delivery record exists for one delivery_key.",
+    "UNKNOWN_DELIVERY forbids automatic resend.",
+    "A delivery may be taken over only before SENDING.",
+    "Primary and standby are not simultaneous active writers.",
+    "If standby freshness is not proven, investment delivery is blocked.",
+    "A missed delivery does not extend the next calendar window.",
+    "Configuration is frozen per run through config_snapshot_id.",
+    "Secrets and direct personal identifiers are absent from public logs."
+  ],
+  "lock_scope_examples": {
+    "portfolio_daily": "PORTFOLIO_DAILY:2026-07-13",
+    "portfolio_intraday": "PORTFOLIO_INTRADAY:event_id:event_version",
+    "hunting": "HUNTING:America_New_York:2026-07-12:regular-session",
+    "source_ingestion": "SOURCE_INGESTION:source_id:cursor-window"
+  },
+  "failover_rule": {
+    "allowed_when": [
+      "heartbeat_expired",
+      "hard_request_deadline_exceeded",
+      "no_micro_progress_and_no_valid_active_request",
+      "process_failed",
+      "fencing_token_lost"
+    ],
+    "not_allowed_when": [
+      "process_is_healthy_but_slow",
+      "delivery_state_is_SENDING",
+      "delivery_state_is_UNKNOWN_DELIVERY",
+      "standby_freshness_unknown"
+    ],
+    "slow_healthy_action": "DEGRADE_NOW"
+  }
+}
