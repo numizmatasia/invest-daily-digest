@@ -483,6 +483,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-stage3.txt
           pytest -q tests/stage3
+          # Remove transient Python bytecode before manifest and git status checks.
+          find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
           python - <<'PYMANIFEST'
           from pathlib import Path
