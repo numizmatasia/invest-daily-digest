@@ -548,3 +548,4 @@ jobs:
 
           git commit -m "Add tested Stage 3 infrastructure foundation"
           git push origin HEAD:stage3-foundation
+          # rerun after filename correction
