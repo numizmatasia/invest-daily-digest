@@ -2,16 +2,14 @@ name: Daily Digest
 
 on:
   workflow_dispatch:
-
   schedule:
-    - cron: '47 6 * * *'
+    - cron: '47 4 * * *'
       timezone: 'Asia/Almaty'
 
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,6 +22,18 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Log scheduler diagnostics
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          echo "event_name=$EVENT_NAME"
+          echo "schedule_expression=${SCHEDULE_EXPRESSION:-manual}"
+          echo "run_started_at_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "run_started_at_almaty=$(TZ=Asia/Almaty date +'%Y-%m-%dT%H:%M:%S%z')"
 
       - name: Run daily digest
         run: python main.py
