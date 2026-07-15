@@ -10,15 +10,7 @@ from stage4.models import CanonicalEvent, EventStatus, NormalizedNews, SourceEvi
 
 _OFFICIAL_CLASSES = {"OFFICIAL", "REGULATOR", "EXCHANGE"}
 _RELIABLE_CLASSES = _OFFICIAL_CLASSES | {"TIER_1", "TIER_2"}
-
-
-def _identity_payload(item: NormalizedNews) -> dict:
-    return {
-        "entity_ids": list(item.entity_ids),
-        "event_type": item.event_type,
-        "effective_key": item.effective_key,
-        "identity": item.key_facts.get("identity", {}),
-    }
+_SINGLE_SOURCE_CONFIRMERS = {"REUTERS", "BLOOMBERG", "AP", "ASSOCIATED PRESS", "FINANCIAL TIMES", "FT", "WALL STREET JOURNAL", "WSJ"}
 
 
 def _event_id(item: NormalizedNews) -> str:
@@ -34,6 +26,12 @@ def _event_id(item: NormalizedNews) -> str:
 
 def _confirmed(items: list[NormalizedNews]) -> bool:
     if any(item.source_class in _OFFICIAL_CLASSES for item in items):
+        return True
+    if any(
+        item.source_class in _RELIABLE_CLASSES
+        and item.source_name.strip().upper() in _SINGLE_SOURCE_CONFIRMERS
+        for item in items
+    ):
         return True
     independent = {
         item.independence_group
@@ -70,13 +68,6 @@ def build_events(items: Iterable[NormalizedNews], repository) -> list[CanonicalE
     for event_id, group in groups.items():
         group.sort(key=lambda item: (item.ingested_at, item.source_ref))
         latest = group[-1]
-        payload = {
-            "event_type": latest.event_type,
-            "entity_ids": list(latest.entity_ids),
-            "effective_key": latest.effective_key,
-            "key_facts": latest.key_facts,
-            "direction": latest.direction,
-        }
         version = 0
         for item in group:
             item_payload = {
@@ -85,6 +76,9 @@ def build_events(items: Iterable[NormalizedNews], repository) -> list[CanonicalE
                 "effective_key": item.effective_key,
                 "key_facts": item.key_facts,
                 "direction": item.direction,
+                "effective_at": item.effective_at.isoformat() if item.effective_at else None,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                "material_update": item.material_update,
             }
             version, _ = service.upsert(
                 event_id=event_id,
@@ -107,6 +101,7 @@ def build_events(items: Iterable[NormalizedNews], repository) -> list[CanonicalE
                 ),
             )
         effective_values = [item.effective_at for item in group if item.effective_at is not None]
+        updated_values = [item.updated_at for item in group if item.updated_at is not None]
         events.append(
             CanonicalEvent(
                 event_id=event_id,
@@ -123,8 +118,10 @@ def build_events(items: Iterable[NormalizedNews], repository) -> list[CanonicalE
                 source_published_at=min(item.published_at for item in group),
                 ingested_at=max(item.ingested_at for item in group),
                 effective_at=min(effective_values) if effective_values else None,
+                updated_at=max(updated_values) if updated_values else None,
+                material_update=any(item.material_update for item in group),
                 numerical_claims=_merge_claims(group, valid_refs),
             )
         )
-    events.sort(key=lambda event: (event.source_published_at, event.event_id))
+    events.sort(key=lambda event: (event.event_time, event.event_id), reverse=True)
     return events

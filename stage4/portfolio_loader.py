@@ -17,11 +17,11 @@ def _canonical_hash(value: Any) -> str:
 
 
 def load_current_portfolio(data: dict[str, Any]) -> PortfolioSnapshot:
-    """Load the repository's frozen percentage-based Freedom/Paidax format.
+    """Load the repository's declared Freedom/Paidax portfolio.
 
-    The adapter does not invent quantity or price. The declared broker weights are
-    preserved independently, so a ticker held at both brokers cannot overwrite
-    either position.
+    Composition remains current until the user reports a purchase, sale or other
+    portfolio change. The adapter does not pretend that declared percentages are
+    live market weights and never invents quantity or price.
     """
     if not isinstance(data, dict):
         raise PortfolioBlockedError("PORTFOLIO_NOT_OBJECT")
@@ -32,8 +32,8 @@ def load_current_portfolio(data: dict[str, Any]) -> PortfolioSnapshot:
 
     brokers: dict[str, BrokerPortfolio] = {}
     warnings: list[str] = [
-        "WEIGHTS_ARE_DECLARED_PERCENTAGES_NOT_QUANTITY_X_PRICE",
-        "PORTFOLIO_FRESHNESS_UNVERIFIED_CURRENT_FORMAT_HAS_NO_AS_OF",
+        "PORTFOLIO_COMPOSITION_DECLARED_CURRENT_UNTIL_USER_REPORTS_CHANGE",
+        "WEIGHTS_ARE_LAST_DECLARED_NOT_LIVE_MARKET_WEIGHTS",
     ]
     for broker in expected:
         raw_positions = data.get(broker)
@@ -56,13 +56,14 @@ def load_current_portfolio(data: dict[str, Any]) -> PortfolioSnapshot:
         total = sum(item.declared_weight_pct for item in positions)
         if not 95 <= total <= 105:
             warnings.append(f"BROKER_WEIGHT_TOTAL_OUTSIDE_TOLERANCE:{broker}:{total:.4f}")
+        positions.sort(key=lambda item: (-item.declared_weight_pct, item.ticker))
         brokers[broker] = BrokerPortfolio(broker=broker, positions=tuple(positions))
 
     return PortfolioSnapshot(
         version="portfolio_sha256:" + _canonical_hash(data),
         brokers=brokers,
         source_format="BROKER_DECLARED_WEIGHT_PERCENTAGES_V1",
-        freshness_status="UNVERIFIED",
+        freshness_status="DECLARED_CURRENT",
         warnings=tuple(warnings),
     )
 

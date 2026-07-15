@@ -1,13 +1,45 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from stage4.models import NormalizedNews
 
 
-_REJECT_CONTENT_KINDS = {"OPINION", "ROUTINE_NOTICE", "ADVERTISEMENT", "TECHNICAL_ANALYSIS"}
+_REJECT_CONTENT_KINDS = {
+    "OPINION",
+    "ROUTINE_NOTICE",
+    "ADVERTISEMENT",
+    "TECHNICAL_ANALYSIS",
+    "PRICE_PREDICTION",
+    "CLICKBAIT",
+}
+_CALENDAR_CONTENT_KINDS = {
+    "CALENDAR",
+    "UPCOMING_EVENT",
+    "UPCOMING_EARNINGS",
+    "EVENT_PREVIEW",
+}
 _ALLOWED_DIRECTIONS = {"POSITIVE", "NEGATIVE", "MIXED", "UNKNOWN"}
+_EFFECTIVE_AT_REQUIRED = {
+    "EARNINGS",
+    "FINANCIAL_RESULTS",
+    "GUIDANCE",
+    "DIVIDEND",
+    "IPO",
+    "LISTING",
+    "STOCK_SPLIT",
+    "MERGER",
+    "ACQUISITION",
+    "SANCTIONS",
+    "REGULATORY_DECISION",
+    "FED_DECISION",
+    "RATE_DECISION",
+    "CPI_RELEASE",
+    "EMPLOYMENT_REPORT",
+    "CONTRACT_AWARD",
+}
 
 
 def _dt(value: Any, field: str) -> datetime:
@@ -52,6 +84,13 @@ def normalize_item(raw: dict[str, Any]) -> NormalizedNews:
     claims = raw.get("numerical_claims", [])
     if not isinstance(claims, list):
         raise ValueError("numerical_claims must be a list")
+    published_at = _dt(raw.get("published_at"), "published_at")
+    ingested_at = _dt(raw.get("ingested_at"), "ingested_at")
+    updated_at = _optional_dt(raw.get("updated_at"), "updated_at")
+    if updated_at is not None and updated_at < published_at:
+        raise ValueError("UPDATED_BEFORE_PUBLISHED")
+    if published_at > ingested_at + timedelta(minutes=15):
+        raise ValueError("PUBLISHED_AFTER_INGESTED")
     return NormalizedNews(
         source_ref=source_ref,
         source_name=source_name,
@@ -60,9 +99,11 @@ def normalize_item(raw: dict[str, Any]) -> NormalizedNews:
         title=str(raw.get("title", "")).strip(),
         summary=str(raw.get("summary", "")).strip(),
         url=str(raw.get("url", "")).strip(),
-        published_at=_dt(raw.get("published_at"), "published_at"),
-        ingested_at=_dt(raw.get("ingested_at"), "ingested_at"),
+        published_at=published_at,
+        ingested_at=ingested_at,
         effective_at=_optional_dt(raw.get("effective_at"), "effective_at"),
+        updated_at=updated_at,
+        material_update=raw.get("material_update") is True,
         content_kind=str(raw.get("content_kind", "EVENT_REPORT")).strip().upper(),
         event_type=event_type,
         entity_ids=entities,
@@ -74,7 +115,7 @@ def normalize_item(raw: dict[str, Any]) -> NormalizedNews:
     )
 
 
-def process_news(raw_items: Iterable[dict[str, Any]]) -> tuple[list[NormalizedNews], list[dict[str, Any]]]:
+def _base_process(raw_items: Iterable[dict[str, Any]]) -> tuple[list[NormalizedNews], list[dict[str, Any]]]:
     accepted: list[NormalizedNews] = []
     rejected: list[dict[str, Any]] = []
     technical_seen: set[tuple[str, str]] = set()
@@ -95,3 +136,77 @@ def process_news(raw_items: Iterable[dict[str, Any]]) -> tuple[list[NormalizedNe
         technical_seen.add(key)
         accepted.append(item)
     return accepted, rejected
+
+
+def process_news(raw_items: Iterable[dict[str, Any]]) -> tuple[list[NormalizedNews], list[dict[str, Any]]]:
+    """Compatibility path for isolated unit tests.
+
+    The live shadow pipeline must call process_news_windowed so date-sensitive
+    freshness rules are always applied.
+    """
+    return _base_process(raw_items)
+
+
+def process_news_windowed(
+    raw_items: Iterable[dict[str, Any]],
+    *,
+    window_start_at: datetime,
+    event_cutoff_at: datetime,
+) -> tuple[list[NormalizedNews], list[NormalizedNews], list[dict[str, Any]], dict[str, Any]]:
+    window_start = _dt(window_start_at, "window_start_at")
+    cutoff = _dt(event_cutoff_at, "event_cutoff_at")
+    if not window_start < cutoff:
+        raise ValueError("INVALID_REPORT_WINDOW")
+
+    raw_list = list(raw_items)
+    normalized, rejected = _base_process(raw_list)
+    accepted: list[NormalizedNews] = []
+    calendar: list[NormalizedNews] = []
+
+    for item in normalized:
+        if item.content_kind in _CALENDAR_CONTENT_KINDS:
+            calendar.append(item)
+            continue
+
+        if item.published_at > cutoff:
+            rejected.append({"title": item.title, "reason": "PUBLISHED_AFTER_CUTOFF_DEFERRED"})
+            continue
+        if item.updated_at is not None and item.updated_at > cutoff:
+            rejected.append({"title": item.title, "reason": "UPDATED_AFTER_CUTOFF_DEFERRED"})
+            continue
+
+        if item.effective_at is not None and item.effective_at > cutoff:
+            calendar.append(item)
+            continue
+
+        if item.event_type in _EFFECTIVE_AT_REQUIRED and item.effective_at is None:
+            rejected.append({"title": item.title, "reason": "EFFECTIVE_AT_REQUIRED_FOR_DATED_EVENT"})
+            continue
+
+        event_time = item.effective_at or item.published_at
+        valid_material_update = bool(
+            item.material_update
+            and item.updated_at is not None
+            and window_start <= item.updated_at <= cutoff
+        )
+
+        if event_time < window_start and not valid_material_update:
+            rejected.append({"title": item.title, "reason": "STALE_EVENT_BEFORE_WINDOW"})
+            continue
+        if item.published_at < window_start and not valid_material_update:
+            rejected.append({"title": item.title, "reason": "STALE_PUBLICATION_BEFORE_WINDOW"})
+            continue
+
+        accepted.append(item)
+
+    reason_counts = Counter(str(item.get("reason", "UNKNOWN")) for item in rejected)
+    stats = {
+        "raw_count": len(raw_list),
+        "accepted_publications": len(accepted),
+        "calendar_publications": len(calendar),
+        "rejected_publications": len(rejected),
+        "rejected_by_reason": dict(sorted(reason_counts.items())),
+        "window_start_at": window_start.isoformat(),
+        "event_cutoff_at": cutoff.isoformat(),
+    }
+    return accepted, calendar, rejected, stats

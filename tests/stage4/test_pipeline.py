@@ -21,8 +21,8 @@ def test_full_shadow_pipeline_uses_stage3_state_and_prepares_only(portfolio_raw,
         rules_version="stage4-rules-v2",
     )
     assert result["events"]
-    assert result["decision"].headline == "Инвестиционные выводы заблокированы"
-    assert "PORTFOLIO_FRESHNESS_NOT_VERIFIED" in result["decision"].warnings
+    assert result["decision"].headline.startswith("Срочных торговых действий нет")
+    assert "PORTFOLIO_FRESHNESS_NOT_VERIFIED" not in result["decision"].warnings
     assert result["delivery"]["state"] == "PREPARED"
     assert result["delivery"]["shadow_only"] is True
     assert result["delivery"]["telegram_send_called"] is False
@@ -44,4 +44,4 @@ def test_checked_in_unapproved_source_catalog_blocks_conclusion(portfolio_raw, t
         rules_version="stage4-rules-v2",
     )
     assert result["coverage"].runtime_status == "RUNTIME_BLOCKED"
-    assert result["decision"].headline == "Инвестиционные выводы заблокированы"
+    assert result["decision"].headline.startswith("Персональный вывод ограничен")

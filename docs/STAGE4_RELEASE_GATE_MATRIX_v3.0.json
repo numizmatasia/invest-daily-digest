@@ -1,0 +1,23 @@
+{
+  "schema_version": "3.0",
+  "release": "stage4-freshness-report-v3.0",
+  "required_checks": [
+    "python compileall stage4 tests/stage4",
+    "pytest -q tests/stage3",
+    "pytest -q tests/stage4",
+    "python test_release_gate.py",
+    "protected production files unchanged",
+    "only stage4/config-stage4/docs-stage4/tests-stage4 paths modified"
+  ],
+  "acceptance_cases": [
+    "old Micron earnings rejected by effective_at",
+    "dated event without effective_at rejected",
+    "material update inside window accepted",
+    "future Cameco report routed to calendar",
+    "IBIT technical signal rejected",
+    "Freedom and Paidax rendered separately",
+    "portfolio composition current until user reports change",
+    "outside-portfolio candidate requires explicit ticker",
+    "report funnel counts reconcile"
+  ]
+}

@@ -76,7 +76,8 @@ class Stage3SnapshotCoordinator:
             portfolio=portfolio_raw,
             watchlist={"stage4_raw": watchlist_raw},
             user_limits={
-                "portfolio_freshness_policy": None,
+                "portfolio_freshness_policy": "COMPOSITION_CURRENT_UNTIL_USER_REPORTS_CHANGE",
+                "declared_weights_are_live_market_weights": False,
                 "materiality_thresholds": None,
                 "trade_thresholds": None,
             },

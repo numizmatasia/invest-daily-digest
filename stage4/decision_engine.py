@@ -39,6 +39,7 @@ def route_relations(event: CanonicalEvent, portfolio: PortfolioSnapshot) -> dict
                         "evidence": evidence,
                     }
                 )
+        relations[broker].sort(key=lambda item: (-float(item["declared_weight_pct"]), item["ticker"]))
     event.broker_relations = relations
     return relations
 
@@ -47,11 +48,11 @@ def assess_event(event: CanonicalEvent, portfolio: PortfolioSnapshot) -> str:
     relations = route_relations(event, portfolio)
     has_portfolio_relation = any(relations[broker] for broker in _BROKERS)
     if not event.confirmed:
-        state = "UNVERIFIED_FACT_ONLY"
+        state = "UNVERIFIED_EXCLUDED_FROM_DAY_DECISION"
     elif has_portfolio_relation:
-        state = "REVIEW_REQUIRED_NO_TRADE_COMMAND"
+        state = "CONFIRMED_PORTFOLIO_REVIEW_NO_TRADE_COMMAND"
     else:
-        state = "FACT_ONLY_NO_PROVEN_PORTFOLIO_LINK"
+        state = "CONFIRMED_FACT_NO_CURRENT_PORTFOLIO_LINK"
     event.attention_state = state
     return state
 
@@ -64,34 +65,51 @@ def build_day_decision(
     accepted = [event for event in events if event.accepted]
     for event in accepted:
         assess_event(event, portfolio)
+
     warnings = list(coverage.warnings) + list(portfolio.warnings)
-    blocking_reasons: list[str] = []
     if coverage.runtime_status == "RUNTIME_BLOCKED":
-        blocking_reasons.append("SOURCE_COVERAGE_NOT_READY")
-    if portfolio.freshness_status != "VERIFIED":
-        blocking_reasons.append("PORTFOLIO_FRESHNESS_NOT_VERIFIED")
-    if blocking_reasons:
         return DayDecision(
             action="NO_TRADE_COMMAND",
-            headline="Инвестиционные выводы заблокированы",
-            rationale="Не подтверждены обязательные условия для персонального инвестиционного вывода.",
+            headline="Персональный вывод ограничен неполным покрытием источников",
+            rationale=(
+                "Подтверждённые факты показываются, но неполный обязательный набор источников "
+                "не позволяет считать обзор окончательным."
+            ),
             coverage_status=coverage.status,
             accepted_event_ids=tuple(event.event_id for event in accepted),
-            warnings=tuple(warnings + blocking_reasons + ["INVESTMENT_CONCLUSIONS_BLOCKED"]),
+            warnings=tuple(warnings + ["SOURCE_COVERAGE_NOT_READY"]),
         )
+
     confirmed_related = [
-        event for event in accepted
+        event
+        for event in accepted
         if event.confirmed and any(event.broker_relations.get(broker) for broker in _BROKERS)
     ]
+    confirmed_unrelated = [
+        event
+        for event in accepted
+        if event.confirmed and not any(event.broker_relations.get(broker) for broker in _BROKERS)
+    ]
+
     if confirmed_related:
-        headline = f"Требуют проверки: {len(confirmed_related)} подтвержденных события"
-        rationale = "Связь доказана, но пороги существенности и торговые действия не угадываются."
+        headline = "Срочных торговых действий нет; есть подтверждённые события для контроля"
+        rationale = (
+            "Приоритет определяется подтверждённостью события и размером затронутых позиций. "
+            "Текущих котировок и правил входа пока нет, поэтому покупка или продажа не назначается."
+        )
+    elif confirmed_unrelated:
+        headline = "По текущему портфелю срочных действий нет"
+        rationale = (
+            "Подтверждённые события вне портфеля рассматриваются только как кандидаты "
+            "на отдельное исследование."
+        )
     elif accepted:
-        headline = "Подтвержденных оснований для действия нет"
-        rationale = "События перечислены как факты; доказанной портфельной связи недостаточно."
+        headline = "Подтверждённых оснований для действия нет"
+        rationale = "Непроверенные материалы исключены из общего решения дня."
     else:
-        headline = "Вывод ограничен покрытием" if coverage.status.value != "FULL" else "Подтвержденных событий нет"
-        rationale = "Итог сформирован без торговой команды."
+        headline = "Подтверждённых актуальных событий нет"
+        rationale = "Старые, календарные и непроверенные материалы не используются как события дня."
+
     return DayDecision(
         action="NO_TRADE_COMMAND",
         headline=headline,

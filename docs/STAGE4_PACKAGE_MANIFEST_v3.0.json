@@ -1,0 +1,122 @@
+{
+  "schema_version": "3.0",
+  "package": "stage4-freshness-report-v3.0",
+  "target_branch": "stage4-morning-portfolio",
+  "files": [
+    {
+      "path": "config/stage4/SHADOW_RUNTIME_REQUIREMENTS.json",
+      "sha256": "7ac96df9f83de81d945eb006d7ab0306b3186bdf069c4bf3646f273752081a78",
+      "size_bytes": 1648
+    },
+    {
+      "path": "docs/STAGE4_FRESHNESS_REPORT_AUDIT_v3.0.md",
+      "sha256": "4766ecd38ea8dcc2cb6318dd35ba3864d622a12e50f2407d88dbe16e80234e72",
+      "size_bytes": 695
+    },
+    {
+      "path": "docs/STAGE4_RELEASE_GATE_MATRIX_v3.0.json",
+      "sha256": "3e6e3ce2212394d8df433d30a39729931e324abd473d805ad48f43f64f753e45",
+      "size_bytes": 826
+    },
+    {
+      "path": "docs/STAGE4_TECH_SPEC_v3.0.md",
+      "sha256": "6ffb43774b4458fb4902c1391ff9948bf2775de3253f647c9fc7ea09593a5ae7",
+      "size_bytes": 2132
+    },
+    {
+      "path": "stage4/__init__.py",
+      "sha256": "a0027789a33779097982fbdaf2f100d9270f1f4b0ab5245991851d0dc4eca118",
+      "size_bytes": 194
+    },
+    {
+      "path": "stage4/completeness.py",
+      "sha256": "07b37b55ff99411e71dc1728cce0c74d895217ccaca00e2f713dcdcedc68a554",
+      "size_bytes": 1453
+    },
+    {
+      "path": "stage4/decision_engine.py",
+      "sha256": "a0954d1829f7acd1349c4e88e3975c691a656da9d10fc6b8d86733f5faf0bbca",
+      "size_bytes": 5523
+    },
+    {
+      "path": "stage4/delivery.py",
+      "sha256": "ae77ff8a7d6059e48f59175485971dbd4c76d257699472359c3d61bc7ba2f78c",
+      "size_bytes": 2301
+    },
+    {
+      "path": "stage4/event_engine.py",
+      "sha256": "09e45655002441cfae1d34d4545dec801fe26802b92ef86b577d27204cb125e7",
+      "size_bytes": 5077
+    },
+    {
+      "path": "stage4/gemini_adapter.py",
+      "sha256": "4557456cabeafb0d65fa64e4686593b6f3893601512c3cac8e5977e7dd14dd07",
+      "size_bytes": 3572
+    },
+    {
+      "path": "stage4/models.py",
+      "sha256": "9a98a337e57e67d5291a3f51dd4bf630e02b8c675886845ffbd7652d7595a368",
+      "size_bytes": 3709
+    },
+    {
+      "path": "stage4/news_processor.py",
+      "sha256": "444069c16866f3658af443773b8e01272811a9e527e48b5095d28226c50ec7c6",
+      "size_bytes": 8194
+    },
+    {
+      "path": "stage4/pipeline.py",
+      "sha256": "77840255e945b94051f9f4b5dbb5142a81da21dcb3d3d34656f365ee18d20ddd",
+      "size_bytes": 3555
+    },
+    {
+      "path": "stage4/portfolio_loader.py",
+      "sha256": "bd04234f1ec424125e35fc696fff0f728868876a4a5898f895fd1d4ab3937b76",
+      "size_bytes": 3805
+    },
+    {
+      "path": "stage4/renderer.py",
+      "sha256": "6c6107f3ce0883cdc1988869a2ec7a10d4c8d2967dfee0853a820417b379d9bd",
+      "size_bytes": 12431
+    },
+    {
+      "path": "stage4/snapshot.py",
+      "sha256": "29b0e7a2d674edc3ca05c5c14aea97f3efb7d23c08b6b7ead10aed8b26cd19b0",
+      "size_bytes": 4652
+    },
+    {
+      "path": "tests/stage4/conftest.py",
+      "sha256": "c88b3d94c483ae507000886d5b042ca1d72529d98209a9b78ac724632880e064",
+      "size_bytes": 629
+    },
+    {
+      "path": "tests/stage4/test_content_events.py",
+      "sha256": "9c9ac24284aaa52964ca052fa378d060682ba42737841f84854aef9b72f912ee",
+      "size_bytes": 6715
+    },
+    {
+      "path": "tests/stage4/test_decision_render.py",
+      "sha256": "27c7a723c1a751a9c2c2bb8c61a02b6285582b83344f67d17f5f7d80bcd50324",
+      "size_bytes": 6717
+    },
+    {
+      "path": "tests/stage4/test_pipeline.py",
+      "sha256": "08ac89bbaa36e73dc300f093fa8d1343f3bd48a05fd3d3c15faf1b4722a7cc7c",
+      "size_bytes": 1770
+    },
+    {
+      "path": "tests/stage4/test_portfolio.py",
+      "sha256": "1401a4b9e34d78de4990c40e1e264f497d0f45337fe27dca925a333b962f9ea9",
+      "size_bytes": 1737
+    },
+    {
+      "path": "tests/stage4/test_snapshot_storage.py",
+      "sha256": "2b2c59a794dad41f43ca1845fd1a9180b89c05be29d351eb046ffc5245ef2a22",
+      "size_bytes": 6340
+    },
+    {
+      "path": "tests/stage4_helpers.py",
+      "sha256": "d23c777b7c5ff5939aec6dddc3d844801ea80f4c01dcf78b6091099e6c4ad734",
+      "size_bytes": 1055
+    }
+  ]
+}

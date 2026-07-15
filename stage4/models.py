@@ -76,6 +76,8 @@ class NormalizedNews:
     published_at: datetime
     ingested_at: datetime
     effective_at: datetime | None
+    updated_at: datetime | None
+    material_update: bool
     content_kind: str
     event_type: str
     entity_ids: tuple[str, ...]
@@ -102,6 +104,8 @@ class CanonicalEvent:
     source_published_at: datetime
     ingested_at: datetime
     effective_at: datetime | None = None
+    updated_at: datetime | None = None
+    material_update: bool = False
     numerical_claims: tuple[dict[str, Any], ...] = ()
     broker_relations: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     attention_state: str = "FACT_ONLY"

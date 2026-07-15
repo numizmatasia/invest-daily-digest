@@ -1,35 +1,45 @@
 {
-  "schema_version": "2.0",
-  "config_version": "stage4-shadow-v2.0",
+  "schema_version": "3.0",
+  "config_version": "stage4-shadow-v3.0",
   "mode": "SHADOW_ONLY",
   "timezone": "Asia/Almaty",
   "calendar": {
     "event_cutoff": "06:25",
-    "snapshot_freeze": "06:27"
+    "snapshot_freeze": "06:27",
+    "window_rule": "previous logical cutoff to current logical cutoff"
   },
-  "current_repository_contract": {
-    "portfolio_format": "Freedom/Paidax declared percentage weights",
-    "portfolio_weight_calculation_from_quantity_and_price": "NOT_AVAILABLE_IN_CURRENT_FROZEN_FORMAT",
+  "freshness_filters": {
+    "event_time_inside_window_required": true,
+    "dated_event_requires_effective_at": true,
+    "old_event_allowed_only_with_material_update_inside_window": true,
+    "future_event_goes_to_calendar": true,
+    "technical_analysis_is_not_event": true,
+    "opinions_price_predictions_clickbait_are_rejected": true
+  },
+  "portfolio_contract": {
+    "composition_current_until_user_reports_change": true,
+    "declared_weights_are_not_live_market_weights": true,
     "freedom_paidax_must_remain_separate": true
   },
-  "blocked_until_approved_or_measured": {
-    "mandatory_source_set": null,
-    "portfolio_freshness_policy": null,
-    "materiality_thresholds": null,
-    "trade_thresholds": null,
-    "production_scheduler": "NOT_ENABLED",
-    "production_telegram_delivery": "NOT_ENABLED"
+  "report_contract": {
+    "confirmed_events_drive_day_conclusion": true,
+    "unverified_events_never_drive_day_conclusion": true,
+    "portfolio_rows_sorted_by_declared_weight": true,
+    "new_candidates_require_explicit_candidate_ticker": true,
+    "calendar_and_exclusions_are_separate_sections": true,
+    "funnel_counts_must_reconcile": true
   },
-  "excluded_from_stage4": {
-    "hunting_contour": "STAGE_7",
-    "market_data_contract": "STAGE_6",
-    "user_fit_and_broker_availability": "STAGE_8"
+  "blocked_until_later_stage": {
+    "live_market_prices": "STAGE_6",
+    "full_hunting_scoring_and_position_sizing": "STAGE_7_8",
+    "production_scheduler_activation": "NOT_ENABLED",
+    "production_telegram_delivery": "NOT_ENABLED"
   },
   "hard_guards": {
     "modify_main_py": false,
     "modify_daily_workflow": false,
     "stateless_bypass": false,
-    "guess_unknown_thresholds": false,
+    "guess_trade_thresholds": false,
     "keyword_is_event_proof": false,
     "production_delivery_enabled": false
   }

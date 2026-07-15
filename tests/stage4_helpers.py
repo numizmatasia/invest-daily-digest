@@ -24,4 +24,6 @@ def raw_item(**overrides: Any) -> dict[str, Any]:
         "direction": "UNKNOWN",
     }
     base.update(overrides)
+    if "effective_at" not in overrides:
+        base["effective_at"] = base["published_at"]
     return base

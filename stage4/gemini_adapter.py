@@ -15,13 +15,34 @@ def _render_value(value: Any) -> str:
 def _deterministic_summary(event: CanonicalEvent, fact_refs: tuple[str, ...]) -> str:
     if not fact_refs:
         return f"Подтверждено событие {event.event_type} для {', '.join(event.entity_ids)}."
-    return "; ".join(f"{ref}={_render_value(event.key_facts[ref])}" for ref in fact_refs)
+    if len(fact_refs) == 1:
+        return _render_value(event.key_facts[fact_refs[0]])
+    labels = {
+        "fact": "Факт",
+        "guidance": "Прогноз компании",
+        "result": "Результат",
+        "change": "Изменение",
+        "reason": "Причина",
+    }
+    return "; ".join(
+        f"{labels.get(ref, ref)}: {_render_value(event.key_facts[ref])}"
+        for ref in fact_refs
+    )
 
 
 def _fallback(event: CanonicalEvent) -> GroundedExplanation:
-    fact_keys = tuple(sorted(str(key) for key in event.key_facts if key != "identity"))
-    if not fact_keys and "identity" in event.key_facts:
-        fact_keys = ("identity",)
+    metadata_keys = {
+        "identity",
+        "display_title",
+        "headline",
+        "title",
+        "candidate_ticker",
+        "asset_ticker",
+        "approved_portfolio_links",
+    }
+    fact_keys = tuple(sorted(str(key) for key in event.key_facts if key not in metadata_keys))
+    if not fact_keys:
+        fact_keys = ()
     return GroundedExplanation(
         event_id=event.event_id,
         event_version=event.event_version,

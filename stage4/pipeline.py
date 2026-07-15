@@ -9,7 +9,7 @@ from stage4.delivery import prepare_shadow_delivery
 from stage4.event_engine import build_events
 from stage4.gemini_adapter import explain_events
 from stage4.models import CanonicalEvent
-from stage4.news_processor import process_news
+from stage4.news_processor import process_news_windowed
 from stage4.portfolio_loader import load_current_portfolio, load_watchlist
 from stage4.renderer import render_digest, split_for_telegram
 from stage4.snapshot import Stage3SnapshotCoordinator
@@ -30,11 +30,20 @@ def run_shadow_morning(
 ) -> dict[str, Any]:
     if repository is None:
         raise RuntimeError("STATE_STORE_REQUIRED")
+
     portfolio = load_current_portfolio(portfolio_raw)
     watchlist, watchlist_warnings, _ = load_watchlist(watchlist_raw)
-    normalized, rejected = process_news(raw_items)
+
+    coordinator = Stage3SnapshotCoordinator(repository)
+    window = coordinator.calendar.for_date(logical_date)
+    normalized, calendar_items, rejected, processing_stats = process_news_windowed(
+        raw_items,
+        window_start_at=window.window_start_at,
+        event_cutoff_at=window.event_cutoff_at,
+    )
+
     events = build_events(normalized, repository)
-    manifest = Stage3SnapshotCoordinator(repository).freeze(
+    manifest = coordinator.freeze(
         logical_date=logical_date,
         portfolio_raw=portfolio_raw,
         watchlist_raw=watchlist_raw,
@@ -44,6 +53,7 @@ def run_shadow_morning(
     )
     included_refs = set(manifest.event_refs)
     included = [event for event in events if f"{event.event_id}:{event.event_version}" in included_refs]
+
     coverage = assess_coverage(
         mandatory_sources=source_catalog.get("mandatory_sources", []),
         source_results=source_results,
@@ -58,8 +68,18 @@ def run_shadow_morning(
             accepted_event_ids=decision.accepted_event_ids,
             warnings=decision.warnings + watchlist_warnings,
         )
+
     explanations = explain_events(included, explainer)
-    text = render_digest(decision, included, explanations)
+    text = render_digest(
+        decision,
+        included,
+        explanations,
+        portfolio=portfolio,
+        watchlist=watchlist,
+        calendar_items=calendar_items,
+        rejected=rejected,
+        processing_stats=processing_stats,
+    )
     chunks = split_for_telegram(text)
     delivery = prepare_shadow_delivery(
         repository=repository,
@@ -72,7 +92,9 @@ def run_shadow_morning(
         "portfolio": portfolio,
         "watchlist": watchlist,
         "normalized": normalized,
+        "calendar_items": calendar_items,
         "rejected": rejected,
+        "processing_stats": processing_stats,
         "all_events": events,
         "events": included,
         "coverage": coverage,
