@@ -1,0 +1,36 @@
+{
+  "schema_version": "2.0",
+  "config_version": "stage4-shadow-v2.0",
+  "mode": "SHADOW_ONLY",
+  "timezone": "Asia/Almaty",
+  "calendar": {
+    "event_cutoff": "06:25",
+    "snapshot_freeze": "06:27"
+  },
+  "current_repository_contract": {
+    "portfolio_format": "Freedom/Paidax declared percentage weights",
+    "portfolio_weight_calculation_from_quantity_and_price": "NOT_AVAILABLE_IN_CURRENT_FROZEN_FORMAT",
+    "freedom_paidax_must_remain_separate": true
+  },
+  "blocked_until_approved_or_measured": {
+    "mandatory_source_set": null,
+    "portfolio_freshness_policy": null,
+    "materiality_thresholds": null,
+    "trade_thresholds": null,
+    "production_scheduler": "NOT_ENABLED",
+    "production_telegram_delivery": "NOT_ENABLED"
+  },
+  "excluded_from_stage4": {
+    "hunting_contour": "STAGE_7",
+    "market_data_contract": "STAGE_6",
+    "user_fit_and_broker_availability": "STAGE_8"
+  },
+  "hard_guards": {
+    "modify_main_py": false,
+    "modify_daily_workflow": false,
+    "stateless_bypass": false,
+    "guess_unknown_thresholds": false,
+    "keyword_is_event_proof": false,
+    "production_delivery_enabled": false
+  }
+}

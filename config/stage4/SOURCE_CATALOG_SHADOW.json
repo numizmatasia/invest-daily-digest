@@ -1,0 +1,5 @@
+{
+  "version": "UNAPPROVED_STAGE4_SOURCE_CATALOG",
+  "mandatory_sources": [],
+  "status": "BLOCKED_UNTIL_USER_APPROVAL_AND_GITHUB_ACTIONS_SMOKE_TESTS"
+}

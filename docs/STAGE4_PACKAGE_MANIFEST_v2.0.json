@@ -1,0 +1,132 @@
+{
+  "schema_version": "2.0",
+  "package_version": "stage4-morning-portfolio-shadow-v2.1-push-safe",
+  "mode": "SHADOW_ONLY",
+  "source_branch": "stage3-foundation",
+  "target_branch": "stage4-morning-portfolio",
+  "files": [
+    {
+      "path": "config/stage4/SHADOW_RUNTIME_REQUIREMENTS.json",
+      "sha256": "c3d6c30236c88d1a6fa6682d480ec0c7681aad06d9248c2a81d149a2ccb2652f",
+      "size_bytes": 1140
+    },
+    {
+      "path": "config/stage4/SOURCE_CATALOG_SHADOW.json",
+      "sha256": "e551bbd0739437aa517a79b02fda4444518f566a3c300c6ebd24ee35da8041c2",
+      "size_bytes": 153
+    },
+    {
+      "path": "docs/STAGE4_IMPLEMENTATION_AUDIT_v2.0.md",
+      "sha256": "b89b441f5e464f0a5c0a37b347b66a50413499e58a251d429cf41676d8572d17",
+      "size_bytes": 1291
+    },
+    {
+      "path": "docs/STAGE4_RELEASE_GATE_MATRIX_v2.0.json",
+      "sha256": "5c73fce1510c9478e4d9286f2f5004cac3ba1649b30e1666eabd4c78d59d7935",
+      "size_bytes": 2009
+    },
+    {
+      "path": "docs/STAGE4_TECH_SPEC_v2.0.md",
+      "sha256": "e080931454eb17ed012071a73dc8ebbdf72ea6fd220a0ae135ff89da68418764",
+      "size_bytes": 2320
+    },
+    {
+      "path": "stage4/__init__.py",
+      "sha256": "a0027789a33779097982fbdaf2f100d9270f1f4b0ab5245991851d0dc4eca118",
+      "size_bytes": 194
+    },
+    {
+      "path": "stage4/completeness.py",
+      "sha256": "07b37b55ff99411e71dc1728cce0c74d895217ccaca00e2f713dcdcedc68a554",
+      "size_bytes": 1453
+    },
+    {
+      "path": "stage4/decision_engine.py",
+      "sha256": "6069fdacd5216a485d4fe2a43fec20403dd507b9881f79d0f2a6b04b66b8ffb7",
+      "size_bytes": 4706
+    },
+    {
+      "path": "stage4/delivery.py",
+      "sha256": "ae77ff8a7d6059e48f59175485971dbd4c76d257699472359c3d61bc7ba2f78c",
+      "size_bytes": 2301
+    },
+    {
+      "path": "stage4/event_engine.py",
+      "sha256": "76bac16c448344d6f870945c62b7ae4c3863d58dac6733007eb4f9f440e97e17",
+      "size_bytes": 4790
+    },
+    {
+      "path": "stage4/gemini_adapter.py",
+      "sha256": "7814ddadf1f724d222ecf64dc11bd1c6da55320da3b5aa7954493a47dd089f2f",
+      "size_bytes": 3064
+    },
+    {
+      "path": "stage4/models.py",
+      "sha256": "a41dedded5af31216f19742e728a2f7c1bc5a8176b639818271ecc4c535b71c7",
+      "size_bytes": 3578
+    },
+    {
+      "path": "stage4/news_processor.py",
+      "sha256": "12bd3660b4cdf50c01c95d0391deb9148b0830e566b27e7a06fe87512f471944",
+      "size_bytes": 4316
+    },
+    {
+      "path": "stage4/pipeline.py",
+      "sha256": "a2c05421febc7011503875a907a7607f0f96d84d762feb776c2c1b64b6abe602",
+      "size_bytes": 3014
+    },
+    {
+      "path": "stage4/portfolio_loader.py",
+      "sha256": "e103cbd989ccc00d98bf012c7d1b6e2642cc795a2111737164094b0eea4ebe98",
+      "size_bytes": 3687
+    },
+    {
+      "path": "stage4/renderer.py",
+      "sha256": "3998a3da6dd410232a9154017ea982f266317767418a60060213b87344156758",
+      "size_bytes": 3673
+    },
+    {
+      "path": "stage4/snapshot.py",
+      "sha256": "5b5fd41633b4b0d8f51eaaaba499a89e80f0e3c68b3a67318e867b9ddecdb263",
+      "size_bytes": 4542
+    },
+    {
+      "path": "tests/stage4/conftest.py",
+      "sha256": "c88b3d94c483ae507000886d5b042ca1d72529d98209a9b78ac724632880e064",
+      "size_bytes": 629
+    },
+    {
+      "path": "tests/stage4/test_content_events.py",
+      "sha256": "6e63d20d6808a40ce9beadb6302ca8aa959589f4400d98eb7b1d1e807e4a6a02",
+      "size_bytes": 2747
+    },
+    {
+      "path": "tests/stage4/test_decision_render.py",
+      "sha256": "55cbf7783fcd0bb29e8aae3493b88b380cac798882ec342658ae2427a657c434",
+      "size_bytes": 4738
+    },
+    {
+      "path": "tests/stage4/test_pipeline.py",
+      "sha256": "2bf3831e401698a55dd91a89dd8a3fd6b8689a847b6e527c2d0b2e9035b1e2ff",
+      "size_bytes": 1775
+    },
+    {
+      "path": "tests/stage4/test_portfolio.py",
+      "sha256": "33f5046c2ffbf2216afa3b360e91ec9c5931f4569f4c9781c145188c56313afd",
+      "size_bytes": 1729
+    },
+    {
+      "path": "tests/stage4/test_snapshot_storage.py",
+      "sha256": "2b2c59a794dad41f43ca1845fd1a9180b89c05be29d351eb046ffc5245ef2a22",
+      "size_bytes": 6340
+    },
+    {
+      "path": "tests/stage4_helpers.py",
+      "sha256": "0600bf1429d40611f3e6aca0c1bf74dd15651e8dd3e3ad9eadc697f466bea57b",
+      "size_bytes": 963
+    }
+  ],
+  "runtime_generated_files": [
+    "docs/STAGE4_PROTECTED_BASELINES_v2.0.json"
+  ]
+}

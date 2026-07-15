@@ -1,0 +1,279 @@
+{
+  "schema_version": "2.0",
+  "baseline": "all tracked files in stage3-foundation before Stage 4 installation",
+  "source_commit": "5c8e087d9530941fe729b217f196a97bafc958d2",
+  "files": [
+    {
+      "path": ".github/workflows/INSTALL_STAGE3_FOUNDATION.yml",
+      "sha256": "79b03afa2ac8ba9603259295e4d199c25a8538d6b47b062de824f3cb8a515993"
+    },
+    {
+      "path": ".github/workflows/INSTALL_STAGE4_MORNING_PORTFOLIO_FIXED.yml",
+      "sha256": "084bdccfd452bfe7184c1fe3473a5c9439691cdfde3f003e97f913d8efdae66c"
+    },
+    {
+      "path": ".github/workflows/INSTALL_STAGE4_MORNING_PORTFOLIO_FIXED_V2.yml",
+      "sha256": "b0d0e6728aae57fe1ee14e514d9d03c72890714b19ebe760ac7d0f1fe738668d"
+    },
+    {
+      "path": ".github/workflows/STAGE3_RELEASE_GATE.yml",
+      "sha256": "7dae737f8c0fc92f124af70ac8e1de38bd2966ac02ff6e097243073bf7a6aa5a"
+    },
+    {
+      "path": ".github/workflows/daily.yml",
+      "sha256": "ab101b70ccda49625f85fd63d706022049851a5e8da2d31d84193005fcc5b3ae"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "sha256": "7bc07b86da152734d7812dfa8aa7db5a1a6a425167e3d4aa8513adbe4e2eb0cf"
+    },
+    {
+      "path": "PROJECT_REQUIREMENTS.json",
+      "sha256": "67fa8906db9523d9a2f1d80f7a66e31e9bff6046fdac5a58d8af5d321ba27ffd"
+    },
+    {
+      "path": "README.md",
+      "sha256": "5907b7b5fb7be03e251574fe1c3f002f64ad11cd8f5b5f15817d68d2921d47ee"
+    },
+    {
+      "path": "STAGE3_FILE_TREE.txt",
+      "sha256": "fe785e1b78da342bcb53e00dac0a5408de1ce87e12ff75d9718f9c6e84f2c4f6"
+    },
+    {
+      "path": "STAGE3_FOUNDATION_README.md",
+      "sha256": "097130f6ef59e67d5ee1fe3350c12b48b4d1e6443363f49e60a5fc5c3b74d56a"
+    },
+    {
+      "path": "STAGE3_IMPLEMENTATION_AUDIT_v1.1.md",
+      "sha256": "083d0b4ca88d6d551eb7bc3e71debf832268b8acc467204e58fdd60d5cee49ea"
+    },
+    {
+      "path": "STAGE3_IMPLEMENTATION_MANIFEST_v1.1.json",
+      "sha256": "28d75748156de5c715794b59bce2ad47b795e92b041a98116cd8ed035efb2674"
+    },
+    {
+      "path": "STAGE3_ORIGINAL_FILES_CHECK.json",
+      "sha256": "bff0bacf51f38c0d2a312d68ad99b4efb9bded3ac553fa2660d4c0a928a7c4fe"
+    },
+    {
+      "path": "STAGE3_WEB_INSTALL_README.md",
+      "sha256": "ad4e7cea9739fc966ac8743c5db17a367b181337803f1645408412d853e32bed"
+    },
+    {
+      "path": "cash_log.json",
+      "sha256": "29cfff8df1c0bbaf24cd471aada3bc8cc38c25fa23950d1d1ee6f1331b1ceebe"
+    },
+    {
+      "path": "config/stage3/portfolio.json",
+      "sha256": "19745c6b33fe33d14dd3bb2bad5d776583a1c2a4b5243ac3f9030d9fdb6ce339"
+    },
+    {
+      "path": "config/stage3/source_catalog.json",
+      "sha256": "cb5d6a37689c066215cf0b64ea7a93d7343d3ac0f5e894f80f179e27ec2718cb"
+    },
+    {
+      "path": "config/stage3/state_machine.json",
+      "sha256": "713253ef0a7f66d60b3d0638088b42fd47c9e209b50cdcaa8fa8580b7eb6d61d"
+    },
+    {
+      "path": "config/stage3/user_limits.json",
+      "sha256": "46a1b090cd7cef126f9e38da5a026346d0e461cbbfc972bbae449638fafb9248"
+    },
+    {
+      "path": "config/stage3/watchlist.json",
+      "sha256": "b199e4c66a4e28ee2e38a77335ef8a78fcab3a7fc024231acc67c4e9c6c2b283"
+    },
+    {
+      "path": "decision_engine.py",
+      "sha256": "497e83f004e48db722a609f1bc6a04d07a84ea08cbe4ed35999cd50e3e46bf35"
+    },
+    {
+      "path": "decision_journal.json",
+      "sha256": "57c62969aa7b89042e8a46b5783296d08b4a34f51f46dea43a300ed2dfb67e71"
+    },
+    {
+      "path": "docs/INVEST_ASSISTANT_STAGE3_IMPLEMENTATION_PLAN_v1.0.md",
+      "sha256": "7e127b8258dfa34e7ffa073f50a4af3f4eed52796aa62e797321214f33561f01"
+    },
+    {
+      "path": "docs/INVEST_ASSISTANT_STAGE3_TECH_SPEC_v1.0.md",
+      "sha256": "2940e17bb3ea8a23940d866e094d5fc11bddb4852f16fda40ca69cb0ca23e16f"
+    },
+    {
+      "path": "docs/INVEST_ASSISTANT_STAGE3_TEST_PLAN_v1.0.md",
+      "sha256": "4ef41844590c8be32fd53929d230eeae519ab5c6c496b038c83966e50b62238e"
+    },
+    {
+      "path": "event_engine.py",
+      "sha256": "2a53c8bbe7ba79c759d6c8a0c36f32950a7adaedf0ada4552a2c93d392c4e716"
+    },
+    {
+      "path": "infra/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "infra/calendar_window.py",
+      "sha256": "bce96887cb5053cb2fc3a2dcd5a217c03b1450ec5f647e184e732318b8c52604"
+    },
+    {
+      "path": "infra/checkpoint_store.py",
+      "sha256": "1b3592c912a7d1de94202a34a640d8ce47804163017af4bc5346ca4f97d889ad"
+    },
+    {
+      "path": "infra/clock_guard.py",
+      "sha256": "f8673386f8498a4501261bab3f906e3740403949f8af0756aaeba30d2c855a42"
+    },
+    {
+      "path": "infra/config_snapshot.py",
+      "sha256": "3f2786ecb437624f6f7e868a77bed1220a77957a2de486cd52506b90c3fdc077"
+    },
+    {
+      "path": "infra/delivery_store.py",
+      "sha256": "a531ce5ce9aae5d009b27bca1fa61851b587f2f40a324f5e2f8d645a493efc27"
+    },
+    {
+      "path": "infra/event_store.py",
+      "sha256": "8ac93c53da3e759c42be2ac3e85424ee6f321d9b67bd2b50b33723804e28df23"
+    },
+    {
+      "path": "infra/lease_service.py",
+      "sha256": "1b272f13ab92c1c000de09cb0deeffa029cd32e1ccd817f4c5959fbe84a232d7"
+    },
+    {
+      "path": "infra/raw_journal.py",
+      "sha256": "d4f31d64c23881f1520f109c791afddf046cf7989bb9ac2c651e2bb8ef9d8edb"
+    },
+    {
+      "path": "infra/snapshot_service.py",
+      "sha256": "ec87277e602c52bded279c9bcf619666ab5c5ed38b1a9fb2c273b5814f9f4a66"
+    },
+    {
+      "path": "infra/technical_alert_service.py",
+      "sha256": "68335ee543006a44e802482feb2d4942c0277e394273e3b8359a5b7e63650236"
+    },
+    {
+      "path": "infra/types.py",
+      "sha256": "75a2a44f5e170dbbf851497d7ba5bd0cc1df6bef7a91ab660bfce2d426edea66"
+    },
+    {
+      "path": "infra/watchdog_service.py",
+      "sha256": "4979129aa5ae4ebfcfe88736516a57300f04bd546552cac2cd06c76c0176fb6e"
+    },
+    {
+      "path": "main.py",
+      "sha256": "1c18ece1fa37b4d69067c3334da0708d64f2cc12d097cc7ec49dfad55287d816"
+    },
+    {
+      "path": "news_processor.py",
+      "sha256": "7c5e5703a9f54afe067e39ea00c9e13564f73a58c2d4d9bf582c521605fc74ae"
+    },
+    {
+      "path": "portfolio.json",
+      "sha256": "d99bceb04dec3aecf583d16efad84879fb684f50cc3928d7b9783b749b3eabd3"
+    },
+    {
+      "path": "portfolio_engine.py",
+      "sha256": "d914fcbcf49f27d714fb3d69ac6b72435ee33ea6990c9c019132c048df2c19e0"
+    },
+    {
+      "path": "pytest.ini",
+      "sha256": "0f5ecfb3b4078bcd01a284bdf05e449fd06fce08ba47a8800fef2f80faec60c9"
+    },
+    {
+      "path": "requirements-stage3.txt",
+      "sha256": "cd1f94929005406bafddb9b7a657c5cce24c3a4e8dddc95cd7a14c6df5dcc32c"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "281bb987e5a4bc553228129c4d5b2dc34547c9d5deef0af56b0168cf5005a933"
+    },
+    {
+      "path": "storage/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "storage/database.py",
+      "sha256": "a7accefd67d47a65863802346cd270a5c46e438b8b1976d41589ec0aebd2e7ef"
+    },
+    {
+      "path": "storage/migrate.py",
+      "sha256": "534026975b50d1666086766cdc2b692b51390221f0619cac31b0795470c01d0a"
+    },
+    {
+      "path": "storage/migrations/0001_stage3_foundation.sql",
+      "sha256": "ffc2c2a5e410c8905eceeacf793930487d82f50799334548b4197b0b887be557"
+    },
+    {
+      "path": "storage/postgres_repository.py",
+      "sha256": "d8fc02dc74bd63220419b98a518eee9c6b3f85e587beaf23bc016fc7b4cbc8fd"
+    },
+    {
+      "path": "storage/repository.py",
+      "sha256": "4e0550c3b23057162c60ea4f75c47fbd2a4ce0e95c6548bb76b3b7db6f3d5cc9"
+    },
+    {
+      "path": "test_release_gate.py",
+      "sha256": "922519d55c4bc39dab72f3ed0d2a7d3ffd307b9f4b1fb96ad5f47ee1773eb600"
+    },
+    {
+      "path": "tests/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/stage3/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/stage3/conftest.py",
+      "sha256": "6becae618be1787c60a7adfd196afbff15e3b6e5bbf7706a643c9b389c4e9b76"
+    },
+    {
+      "path": "tests/stage3/test_alert_clock_security.py",
+      "sha256": "3f341948f5618a5dcae49b6f9fdb530249e0882cbfa4ebad55fb72ab30e5be48"
+    },
+    {
+      "path": "tests/stage3/test_calendar_snapshot.py",
+      "sha256": "4f8f55486d25d849bff838a1ca3f0d38f70c07d1c32c91786a748873a7fbb559"
+    },
+    {
+      "path": "tests/stage3/test_checkpoint.py",
+      "sha256": "39391a66d5d2135d04b4e40d7e3c4599340081d5122d774bf990f34918270a62"
+    },
+    {
+      "path": "tests/stage3/test_config_snapshot.py",
+      "sha256": "3f4011174bf15d4c7f34add56f9eb6a18878ad85c2120c4a1791e1e666791824"
+    },
+    {
+      "path": "tests/stage3/test_delivery.py",
+      "sha256": "dc080d2edd1476466d3370381fde4fec77cc123e3161052d2f8cd159308753e2"
+    },
+    {
+      "path": "tests/stage3/test_event_versions.py",
+      "sha256": "bd972a184494fcb76949b092e0029279aadacbffad76819477fb2e7febcd4876"
+    },
+    {
+      "path": "tests/stage3/test_lease_fencing.py",
+      "sha256": "cc70389ef75ce4915ade58b7401cbeefaa431333afb6646ac378a4f282da8a0b"
+    },
+    {
+      "path": "tests/stage3/test_postgres_integration.py",
+      "sha256": "3310ba44680a806f798ab9c6b4cd44529a1c21c91d30261f0ea8739af222baab"
+    },
+    {
+      "path": "tests/stage3/test_raw_journal.py",
+      "sha256": "24d8e7e4f09e041b0c6fad5f445ad56e56d2221ba08b56f3592e20f2174ad8ab"
+    },
+    {
+      "path": "tests/stage3/test_sql_contract.py",
+      "sha256": "d09831647b97e2e4d1146cd5ac3356f15f12b4edf11fd6b6523fcce8d638b9ec"
+    },
+    {
+      "path": "tests/stage3/test_watchdog.py",
+      "sha256": "dbd90dfaa0f879c66b5268364e5578faa5f968af41e71fb96959d33e93a78393"
+    },
+    {
+      "path": "watchlist.json",
+      "sha256": "73eee2a669c36c287b882f6e40d01058a0d2bb2126b4b762bb7f090922e1e64d"
+    }
+  ]
+}

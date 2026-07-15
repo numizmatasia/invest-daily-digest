@@ -1,0 +1,34 @@
+{
+  "schema_version": "2.0",
+  "stage": "Stage 4 stable morning portfolio shadow",
+  "status": "SHADOW_FOUNDATION_CANDIDATE",
+  "implemented_and_automated": [
+    "current Freedom/Paidax percentage portfolio format loads without mixing brokers",
+    "current object-based watchlist format loads and invalid watchlist does not stop portfolio parsing",
+    "portfolio age is not guessed and blocks personal investment conclusions",
+    "keywords do not prove events",
+    "opinion/routine content is rejected before event creation",
+    "stable physical-event identity merges duplicate headlines and separates different event types",
+    "syndicated copies do not count as independent confirmations",
+    "thematic portfolio links require an explicit approved_portfolio_links field",
+    "missing mandatory source catalog never returns FULL coverage",
+    "Stage 3 event/config/window/snapshot/delivery state is used without stateless bypass",
+    "calendar window enforces both lower bound and cutoff/freeze upper bounds",
+    "reused frozen snapshot retains its original config versions",
+    "repository event-version changes block stale delivery",
+    "Gemini free prose is rejected; only existing source/fact references may be selected",
+    "Freedom and Paidax render as separate blocks",
+    "all accepted event IDs survive Telegram chunking",
+    "shadow delivery stops at PREPARED and never sends Telegram",
+    "installer performs the initial release gate before push and installs no workflow file"
+  ],
+  "explicitly_blocked_or_deferred": {
+    "approved_mandatory_source_set": "BLOCKED_PENDING_APPROVAL_AND_LIVE_SMOKE_TEST",
+    "portfolio_freshness_policy_and_as_of": "BLOCKED_PENDING_INPUT_CONTRACT_REVISION",
+    "quantity_x_price_weight_calculation": "BLOCKED_CURRENT_PORTFOLIO_HAS_PERCENTAGES_ONLY",
+    "production_scheduler_and_telegram": "DISABLED_UNTIL_PILOT_AND_MEASURED_SLA",
+    "market_data": "STAGE_6",
+    "hunting": "STAGE_7",
+    "broker_availability_and_user_fit": "STAGE_8"
+  }
+}
