@@ -1,0 +1,174 @@
+name: Stage 4 Live Input Capture
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/STAGE4_LIVE_INPUT_CAPTURE.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stage4-live-input-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out Stage 4 shadow branch
+        uses: actions/checkout@v4
+        with:
+          ref: stage4-morning-portfolio
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install current production dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Capture live collector output without Telegram
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from datetime import date, datetime
+          from pathlib import Path
+          from typing import Any
+
+          import main
+
+
+          def json_safe(value: Any) -> Any:
+              if isinstance(value, dict):
+                  return {str(key): json_safe(item) for key, item in value.items()}
+              if isinstance(value, (list, tuple)):
+                  return [json_safe(item) for item in value]
+              if isinstance(value, set):
+                  return sorted(
+                    (json_safe(item) for item in value),
+                    key=lambda item: json.dumps(item, sort_keys=True, default=str),
+                )
+              if isinstance(value, (datetime, date)):
+                  return value.isoformat()
+              if value is None or isinstance(value, (str, int, float, bool)):
+                  return value
+              return str(value)
+
+
+          portfolio_data = main.load_json_file("portfolio.json")
+          watchlist_data = main.load_json_file("watchlist.json")
+          entities = main.build_user_entities(portfolio_data, watchlist_data)
+
+          (
+              collected_articles,
+              base_working,
+              radar_working,
+              failures,
+              collection_stats,
+          ) = main.collect_sources(entities)
+
+          deduplicated_articles = main.deduplicate_articles(collected_articles)
+          quality_articles, quality_stats = main.quality_filter_articles(
+              deduplicated_articles
+          )
+          clusters = main.cluster_articles(quality_articles, entities)
+          confirmed_events, research_events = main.classify_event_buckets(clusters)
+
+          payload = {
+              "capture_version": "STAGE4-LIVE-INPUT-CAPTURE-v1",
+              "captured_at_kz": main.now_kz().isoformat(),
+              "branch_under_test": "stage4-morning-portfolio",
+              "portfolio": portfolio_data,
+              "watchlist": watchlist_data,
+              "entities": entities,
+              "source_status": {
+                  "base_working": base_working,
+                  "radar_working": radar_working,
+                  "failures": failures,
+              },
+              "counts": {
+                  "collected_articles": len(collected_articles),
+                  "deduplicated_articles": len(deduplicated_articles),
+                  "quality_articles": len(quality_articles),
+                  "clusters": len(clusters),
+                  "confirmed_events": len(confirmed_events),
+                  "research_events": len(research_events),
+              },
+              "collection_stats": collection_stats,
+              "quality_stats": quality_stats,
+              "quality_articles": quality_articles,
+              "clusters": clusters,
+              "confirmed_events": confirmed_events,
+              "research_events": research_events,
+          }
+
+          safe_payload = json_safe(payload)
+          output_path = Path("artifacts/stage4_live_input_capture.json")
+          output_path.write_text(
+              json.dumps(safe_payload, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+
+          summary_lines = [
+              "STAGE 4 LIVE INPUT CAPTURE",
+              f"Captured at KZ: {safe_payload['captured_at_kz']}",
+              f"RSS working: {len(base_working)}/{len(main.BASE_FEEDS)}",
+              f"Radar working: {len(radar_working)}/3",
+              f"Failures: {len(failures)}",
+              f"Collected articles: {len(collected_articles)}",
+              f"After deduplication: {len(deduplicated_articles)}",
+              f"After quality filter: {len(quality_articles)}",
+              f"Clusters: {len(clusters)}",
+              f"Confirmed events: {len(confirmed_events)}",
+              f"Research events: {len(research_events)}",
+              "",
+              "Telegram was not called.",
+              "Production files were not modified.",
+          ]
+          Path("artifacts/stage4_live_input_summary.txt").write_text(
+              "\n".join(summary_lines) + "\n",
+              encoding="utf-8",
+          )
+
+          print("\n".join(summary_lines))
+          PY
+
+      - name: Verify production files remain unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all -- ':!artifacts')"
+
+      - name: Upload live input artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-live-input-capture
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
