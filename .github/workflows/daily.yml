@@ -3,7 +3,7 @@ name: Daily Digest
 on:
   workflow_dispatch:
   schedule:
-    - cron: '47 4 * * *'
+    - cron: '00 5 * * *'
       timezone: 'Asia/Almaty'
 
 jobs:
