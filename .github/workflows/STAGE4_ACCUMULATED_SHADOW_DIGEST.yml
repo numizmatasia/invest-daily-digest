@@ -757,7 +757,30 @@ jobs:
           X18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW5fcnVuKCkK
           PAYLOAD
           base64 --decode /tmp/stage4_accumulated_shadow.b64 > /tmp/stage4_accumulated_shadow.py
+          export PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}"
+          test -f "$GITHUB_WORKSPACE/main.py"
           python -m py_compile /tmp/stage4_accumulated_shadow.py
+          python - <<'PYIMPORT'
+          import main
+
+          required = {
+              "build_user_entities",
+              "choose_representative_article",
+              "classify_event_buckets",
+              "cluster_articles",
+              "confirmation_status",
+              "deduplicate_articles",
+              "importance_score",
+              "load_json_file",
+              "quality_filter_articles",
+              "source_profile",
+              "topic_event_is_material",
+          }
+          missing = sorted(name for name in required if not hasattr(main, name))
+          if missing:
+              raise RuntimeError(f"main.py is missing required interfaces: {missing}")
+          print("main.py import and interface preflight: PASS")
+          PYIMPORT
           python /tmp/stage4_accumulated_shadow.py
 
       - name: Validate shadow report
