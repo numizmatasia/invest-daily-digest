@@ -63,6 +63,7 @@ jobs:
           import json
           import os
           import shutil
+          import urllib.error
           import urllib.request
           import zipfile
           from pathlib import Path
@@ -71,6 +72,38 @@ jobs:
           repository = os.environ["GITHUB_REPOSITORY"]
           artifact_name = os.environ["STATE_ARTIFACT_NAME"]
           current_run_id = int(os.environ["GITHUB_RUN_ID"])
+
+
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+
+          def download_artifact_archive(download_url, api_headers, zip_path):
+              opener = urllib.request.build_opener(NoRedirect())
+              request = urllib.request.Request(download_url, headers=api_headers)
+              try:
+                  with opener.open(request, timeout=120) as response:
+                      zip_path.write_bytes(response.read())
+                      return
+              except urllib.error.HTTPError as error:
+                  if error.code not in {301, 302, 303, 307, 308}:
+                      raise
+                  location = error.headers.get("Location")
+                  if not location:
+                      raise RuntimeError(
+                          "Artifact download redirect did not include a Location header"
+                      ) from error
+
+              # GitHub redirects artifact downloads to a short-lived signed URL on
+              # another host. Do not forward the GitHub Authorization header there.
+              redirected_request = urllib.request.Request(
+                  location,
+                  headers={"User-Agent": api_headers["User-Agent"]},
+              )
+              with urllib.request.urlopen(redirected_request, timeout=120) as response:
+                  zip_path.write_bytes(response.read())
 
           headers = {
               "Accept": "application/vnd.github+json",
@@ -101,9 +134,7 @@ jobs:
           latest = candidates[0]
           download_url = latest["archive_download_url"]
           zip_path = Path("previous_artifact/state.zip")
-          request = urllib.request.Request(download_url, headers=headers)
-          with urllib.request.urlopen(request, timeout=120) as response:
-              zip_path.write_bytes(response.read())
+          download_artifact_archive(download_url, headers, zip_path)
 
           with zipfile.ZipFile(zip_path) as archive:
               archive.extractall("previous_artifact/unpacked")
