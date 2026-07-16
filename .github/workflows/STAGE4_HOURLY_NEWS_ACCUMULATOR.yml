@@ -548,8 +548,14 @@ jobs:
           set -euo pipefail
           find . -type d -name '__pycache__' -prune -exec rm -rf {} +
           find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          rm -rf previous_artifact
           git diff --exit-code
-          test -z "$(git status --porcelain --untracked-files=all -- ':!state')"
+          unexpected="$(git status --porcelain --untracked-files=all -- ':!state')"
+          if [ -n "$unexpected" ]; then
+            echo "Unexpected repository changes:"
+            echo "$unexpected"
+            exit 1
+          fi
 
       - name: Publish rolling state artifact
         id: upload
