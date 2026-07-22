@@ -6,34 +6,58 @@ on:
     - cron: '00 5 * * *'
       timezone: 'Asia/Almaty'
 
+concurrency:
+  group: daily-investment-digest
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
     steps:
-      - name: Checkout repository
+      - name: Checkout main branch
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Log scheduler diagnostics
+      - name: Verify runtime inputs and code version
         shell: bash
         env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EVENT_NAME: ${{ github.event_name }}
           SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
+          test -n "$TELEGRAM_BOT_TOKEN"
+          test -n "$TELEGRAM_CHAT_ID"
+          test -n "$GEMINI_API_KEY"
+          test -f main.py
+
           echo "event_name=$EVENT_NAME"
           echo "schedule_expression=${SCHEDULE_EXPRESSION:-manual}"
+          echo "branch=$(git branch --show-current)"
+          echo "commit=$(git rev-parse HEAD)"
+          grep '^VERSION =' main.py
+          sha256sum main.py
           echo "run_started_at_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           echo "run_started_at_almaty=$(TZ=Asia/Almaty date +'%Y-%m-%dT%H:%M:%S%z')"
+
+      - name: Compile main.py
+        run: python -m py_compile main.py
 
       - name: Run daily digest
         run: python main.py
