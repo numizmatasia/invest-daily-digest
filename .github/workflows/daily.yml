@@ -46,21 +46,22 @@ jobs:
           test -n "$TELEGRAM_CHAT_ID"
           test -n "$GEMINI_API_KEY"
           test -f main.py
+          test -f run_digest.py
 
           echo "event_name=$EVENT_NAME"
           echo "schedule_expression=${SCHEDULE_EXPRESSION:-manual}"
           echo "branch=$(git branch --show-current)"
           echo "commit=$(git rev-parse HEAD)"
           grep '^VERSION =' main.py
-          sha256sum main.py
+          sha256sum main.py run_digest.py
           echo "run_started_at_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           echo "run_started_at_almaty=$(TZ=Asia/Almaty date +'%Y-%m-%dT%H:%M:%S%z')"
 
-      - name: Compile main.py
-        run: python -m py_compile main.py
+      - name: Compile Python files
+        run: python -m py_compile main.py run_digest.py
 
       - name: Run daily digest
-        run: python main.py
+        run: python run_digest.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
